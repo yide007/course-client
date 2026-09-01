@@ -442,6 +442,27 @@ body {
   white-space: nowrap;
   vertical-align: middle;
   box-sizing: border-box;
+  border: 1px solid transparent;
+  background: #f1f5f9;
+  color: #334155;
+}
+.btn-sm:hover {
+  background: #e2e8f0;
+}
+.btn:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+.btn-danger-outline {
+  background: #fff;
+  color: #dc2626;
+  border-color: #fecaca !important;
+}
+.btn-danger-outline:hover {
+  background: #fef2f2 !important;
+  border-color: #dc2626 !important;
+  color: #b91c1c;
 }
 
 .btn-xs {

@@ -1935,6 +1935,49 @@ async function deleteSource(sourceId) {
 //  章节管理
 // ============================================================
 let currentChapterMgmtCourseId = null;
+let chapterMgmtDraft = null;
+let chapterMgmtOrigDetail = null;
+
+function _chaptersDeepClone(arr) {
+  return JSON.parse(JSON.stringify(arr || []));
+}
+
+function _saveChaptersDraftToDb() {
+  return new Promise((resolve) => {
+    (async () => {
+      try {
+        const detail = chapterMgmtOrigDetail;
+        if (!detail) { resolve({ success: false, error: '课程信息丢失' }); return; }
+        const draft = chapterMgmtDraft || [];
+        const totalLessons = draft.reduce((s, c) => s + ((c.lessons || []).length), 0);
+        const totalChapters = draft.length;
+        const updatePayload = {
+          courseId: detail.id,
+          categoryId: detail.categoryId,
+          title: detail.title,
+          subtitle: detail.subtitle || '',
+          description: detail.description || '',
+          instructor: detail.instructor || '',
+          level: detail.level || '初级',
+          duration: `${totalChapters}章${totalLessons}集`,
+          rating: detail.rating || 0,
+          students: detail.students || 0,
+          coverImage: detail.coverImage || '',
+          coverColor: detail.coverColor || '',
+          domain: detail.domain || '',
+          port: detail.port != null ? detail.port : '',
+          token: detail.token || '',
+          sourcePath: detail.sourcePath || '/',
+          chapters: draft,
+        };
+        const r = await api.updateCourse(updatePayload);
+        resolve(r || { success: false, error: 'updateCourse 返回空' });
+      } catch (e) {
+        resolve({ success: false, error: (e && e.message) || String(e) });
+      }
+    })();
+  });
+}
 
 function _formatDuration(sec) {
   const s = Number(sec) || 0;
@@ -1952,94 +1995,383 @@ async function openChapterMgmt(courseId) {
     currentChapterMgmtCourseId = courseId;
     const detail = await api.getCourseDetail(courseId);
     if (!detail) { alert('课程不存在'); return; }
+    chapterMgmtOrigDetail = detail;
+    chapterMgmtDraft = _chaptersDeepClone(detail.chapters || []);
 
-    const chapters = detail.chapters || [];
-    let totalLessons = 0;
-    let totalPdfs = 0;
-    chapters.forEach(ch => {
-      totalLessons += (ch.lessons || []).length;
-      totalPdfs += (ch.pdfs || []).length;
-    });
+    function _totals() {
+      let L = 0, P = 0;
+      (chapterMgmtDraft || []).forEach(ch => {
+        L += (ch.lessons || []).length;
+        P += (ch.pdfs || []).length;
+      });
+      return { chapters: (chapterMgmtDraft || []).length, lessons: L, pdfs: P };
+    }
 
-    const chaptersHtml = chapters.map((ch, chIdx) => {
-      const lessons = ch.lessons || [];
-      const pdfs = ch.pdfs || [];
-      const lessonRows = lessons.map((l, lIdx) => {
-        const isFree = l.free || l.isFree;
-        const videoUrl = escapeHtml(l.videoUrl || l.video_url || l.path || '');
-        const safeTitle = escapeHtml(l.title || '未命名课时');
-        return `
-        <tr data-chapter-lesson="${chIdx}-${lIdx}">
-          <td style="width:50px;color:#94a3b8;">${String(lIdx + 1).padStart(2, '0')}</td>
-          <td>
-            <strong>${safeTitle}</strong>
-            ${isFree ? `<span style="margin-left:8px;padding:1px 8px;border-radius:10px;background:#fef3c7;color:#b45309;font-size:11px;">免费</span>` : ''}
-          </td>
-          <td style="max-width:480px;">
-            ${videoUrl ? `<code style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:4px 8px;" title="${videoUrl}">${videoUrl}</code>` : '<span style="color:#94a3b8;">--</span>'}
-          </td>
-        </tr>`;
-      }).join('');
+    function _render() {
+      const T = _totals();
+      const html = `
+      <div style="padding:20px;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;">
+        <div style="margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <div style="font-size:14px;font-weight:700;color:#1e293b;">📋 章节与课时管理</div>
+            <span style="color:#94a3b8;font-size:12px;">（编辑后需点击底部「💾 保存修改」写入数据库）</span>
+          </div>
+          <button id="btn-add-chapter-top" class="btn btn-primary">＋ 添加章节</button>
+        </div>
 
-      const pdfRows = pdfs.map((p, pIdx) => {
-        const pname = escapeHtml(p.name || p.path || '未命名 PDF');
-        const purl = escapeHtml(p.url || p.path || '');
-        return `
-        <tr data-chapter-pdf="${chIdx}-${pIdx}" style="background:#fafbff;">
-          <td style="width:50px;color:#94a3b8;">${String(pIdx + 1).padStart(2, '0')}</td>
-          <td>📄 <strong>${pname}</strong> <span style="color:#94a3b8;font-size:11px;">（资料）</span></td>
-          <td style="max-width:480px;">
-            ${purl ? `<code style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:4px 8px;" title="${purl}">${purl}</code>` : '<span style="color:#94a3b8;">--</span>'}
-          </td>
-        </tr>`;
-      }).join('');
+        ${(chapterMgmtDraft && chapterMgmtDraft.length) ? chapterMgmtDraft.map((ch, chIdx) => {
+          const lessons = ch.lessons || [];
+          const pdfs = ch.pdfs || [];
+          const totalDur = _formatDuration(lessons.reduce((s, l) => s + (Number(l.duration) || 0), 0));
 
-      const totalDur = _formatDuration(lessons.reduce((s, l) => s + (Number(l.duration) || 0), 0));
+          const lessonRows = lessons.map((l, lIdx) => {
+            const isFree = l.free || l.isFree;
+            const videoUrl = l.videoUrl || l.video_url || l.path || '';
+            const safeTitle = escapeHtml(l.title || '未命名课时');
+            const safeUrl = escapeHtml(videoUrl);
+            return `
+            <tr data-chapter-lesson="${chIdx}-${lIdx}">
+              <td style="width:50px;color:#94a3b8;">${String(lIdx + 1).padStart(2, '0')}</td>
+              <td style="min-width:200px;">
+                <strong>${safeTitle}</strong>
+                ${isFree ? `<span style="margin-left:8px;padding:1px 8px;border-radius:10px;background:#fef3c7;color:#b45309;font-size:11px;">免费</span>` : ''}
+              </td>
+              <td style="max-width:420px;">
+                ${safeUrl ? `<code style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:4px 8px;" title="${safeUrl}">${safeUrl}</code>` : '<span style="color:#94a3b8;">--</span>'}
+              </td>
+              <td style="width:160px;text-align:right;">
+                <button class="btn btn-sm" data-act="edit-lesson" data-ch="${chIdx}" data-idx="${lIdx}" style="padding:4px 10px;font-size:12px;">✏️ 编辑</button>
+                <button class="btn btn-sm btn-danger-outline" data-act="del-lesson" data-ch="${chIdx}" data-idx="${lIdx}" style="padding:4px 10px;font-size:12px;margin-left:6px;">🗑 删除</button>
+              </td>
+            </tr>`;
+          }).join('');
 
-      return `
-      <div class="chapter-mgmt-block" style="margin-bottom:20px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;background:#fff;">
-        <div class="chapter-mgmt-header" style="padding:12px 18px;background:linear-gradient(135deg,#eef2ff 0%,#ede9fe 100%);display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e5e7eb;gap:12px;">
-          <div style="display:flex;align-items:center;gap:12px;">
-            <span style="width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;">${chIdx + 1}</span>
-            <div>
-              <div style="font-size:15px;font-weight:700;color:#1e1b4b;">${escapeHtml(ch.title || `第${chIdx + 1}章`)}</div>
-              <div style="font-size:12px;color:#64748b;margin-top:2px;">
-                🎬 ${lessons.length} 个课时 · 📄 ${pdfs.length} 份资料 · ⏱ ${totalDur}
+          const pdfRows = pdfs.map((p, pIdx) => {
+            const pname = escapeHtml(p.name || p.path || '未命名资料');
+            const purl = escapeHtml(p.url || p.path || '');
+            return `
+            <tr data-chapter-pdf="${chIdx}-${pIdx}" style="background:#fafbff;">
+              <td style="width:50px;color:#94a3b8;">${String(pIdx + 1).padStart(2, '0')}</td>
+              <td style="min-width:200px;">📄 <strong>${pname}</strong> <span style="color:#94a3b8;font-size:11px;">（资料）</span></td>
+              <td style="max-width:420px;">
+                ${purl ? `<code style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:4px 8px;" title="${purl}">${purl}</code>` : '<span style="color:#94a3b8;">--</span>'}
+              </td>
+              <td style="width:160px;text-align:right;">
+                <button class="btn btn-sm" data-act="edit-pdf" data-ch="${chIdx}" data-idx="${pIdx}" style="padding:4px 10px;font-size:12px;">✏️ 编辑</button>
+                <button class="btn btn-sm btn-danger-outline" data-act="del-pdf" data-ch="${chIdx}" data-idx="${pIdx}" style="padding:4px 10px;font-size:12px;margin-left:6px;">🗑 删除</button>
+              </td>
+            </tr>`;
+          }).join('');
+
+          const tbodyEmpty = (!lessonRows && !pdfRows)
+            ? `<tr><td colspan="4" style="padding:20px;text-align:center;color:#94a3b8;">该章节暂无课时和资料</td></tr>`
+            : (!lessonRows ? `<tr><td colspan="4" style="padding:10px;text-align:center;color:#cbd5e1;font-size:12px;background:#fafbff;">暂无课时</td></tr>` : '') +
+              (!pdfRows ? '' : '');
+
+          return `
+          <div class="chapter-mgmt-block" style="margin-bottom:20px;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;background:#fff;">
+            <div class="chapter-mgmt-header" style="padding:12px 18px;background:linear-gradient(135deg,#eef2ff 0%,#ede9fe 100%);display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e5e7eb;gap:12px;flex-wrap:wrap;">
+              <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;">
+                <span style="width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;">${chIdx + 1}</span>
+                <div style="min-width:0;">
+                  <div style="font-size:15px;font-weight:700;color:#1e1b4b;">${escapeHtml(ch.title || `第${chIdx + 1}章`)}</div>
+                  <div style="font-size:12px;color:#64748b;margin-top:2px;">
+                    🎬 ${lessons.length} 个课时 · 📄 ${pdfs.length} 份资料 · ⏱ ${totalDur}
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button class="btn btn-sm" data-act="add-lesson" data-ch="${chIdx}" style="padding:6px 12px;font-size:12px;">🎬 添加课时</button>
+                <button class="btn btn-sm" data-act="add-pdf" data-ch="${chIdx}" style="padding:6px 12px;font-size:12px;">📄 添加资料</button>
+                <button class="btn btn-sm" data-act="edit-chapter" data-ch="${chIdx}" style="padding:6px 12px;font-size:12px;">✏️ 编辑章名</button>
+                <button class="btn btn-sm" data-act="move-chapter-up" data-ch="${chIdx}" style="padding:6px 10px;font-size:12px;" title="上移">⬆️</button>
+                <button class="btn btn-sm" data-act="move-chapter-down" data-ch="${chIdx}" style="padding:6px 10px;font-size:12px;" title="下移">⬇️</button>
+                <button class="btn btn-sm btn-danger-outline" data-act="del-chapter" data-ch="${chIdx}" style="padding:6px 12px;font-size:12px;">🗑 删除章节</button>
               </div>
             </div>
+            <div style="overflow-x:auto;">
+              <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                <thead>
+                  <tr style="background:#f8fafc;border-bottom:1px solid #e5e7eb;">
+                    <th style="padding:10px 16px;text-align:left;font-weight:600;color:#475569;">#</th>
+                    <th style="padding:10px 16px;text-align:left;font-weight:600;color:#475569;">名称</th>
+                    <th style="padding:10px 16px;text-align:left;font-weight:600;color:#475569;">链接/路径</th>
+                    <th style="padding:10px 16px;text-align:right;font-weight:600;color:#475569;">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${lessonRows}
+                  ${pdfRows}
+                  ${tbodyEmpty}
+                </tbody>
+              </table>
+            </div>
+          </div>`;
+        }).join('') : `<div class="empty-state"><p style="text-align:center;color:#94a3b8;padding:60px 20px 20px;">该课程暂无章节</p>
+          <div style="text-align:center;padding-bottom:40px;"><button id="btn-add-chapter-empty" class="btn btn-primary">＋ 添加第一个章节</button></div>
+        </div>`}
+
+        <div style="padding:24px;border:2px dashed #cbd5e1;border-radius:12px;background:#fafbff;margin-bottom:24px;display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-weight:700;color:#334155;margin-bottom:4px;">当前草稿统计</div>
+            <div style="font-size:12px;color:#64748b;">📚 ${T.chapters} 章 · 🎬 ${T.lessons} 个课时 · 📄 ${T.pdfs} 份资料</div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button id="btn-save-chapters" class="btn btn-primary" style="padding:10px 20px;font-size:14px;">💾 保存修改到数据库</button>
+            <button id="btn-reset-chapters" class="btn btn-secondary" style="padding:10px 20px;font-size:14px;">↺ 撤销修改，恢复原始</button>
           </div>
         </div>
-        <div style="overflow-x:auto;">
-          <table style="width:100%;border-collapse:collapse;font-size:13px;">
-            <thead>
-              <tr style="background:#f8fafc;border-bottom:1px solid #e5e7eb;">
-                <th style="padding:10px 16px;text-align:left;font-weight:600;color:#475569;">#</th>
-                <th style="padding:10px 16px;text-align:left;font-weight:600;color:#475569;">名称</th>
-                <th style="padding:10px 16px;text-align:left;font-weight:600;color:#475569;">链接/路径</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${lessonRows || `<tr><td colspan="3" style="padding:20px;text-align:center;color:#94a3b8;">该章节暂无课时</td></tr>`}
-              ${pdfRows}
-            </tbody>
-          </table>
-        </div>
       </div>`;
-    }).join('');
 
-    const html = `
-    <div style="padding:20px;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;">
-      <div style="margin-bottom:12px;">
-        <div style="font-size:14px;font-weight:700;color:#1e293b;margin-bottom:8px;">📋 章节与课时详情</div>
-      </div>
+      const container = document.getElementById('course-management');
+      if (!container) return;
+      container.innerHTML = html;
+      _bindChapterMgmtEvents();
+      _updateHeaderStats();
+    }
 
-      ${chaptersHtml || `<div class="empty-state"><p style="text-align:center;color:#94a3b8;padding:60px 20px;">该课程暂无章节</p></div>`}
-    </div>`;
+    function _updateHeaderStats() {
+      const T = _totals();
+      const statsBar = document.getElementById('chapters-mgmt-stats');
+      if (statsBar) {
+        const boxes = statsBar.querySelectorAll('[data-stat-box]');
+        if (boxes.length >= 3) {
+          boxes[0].textContent = `📚 ${T.chapters} 章`;
+          boxes[1].textContent = `🎬 ${T.lessons} 个课时`;
+          boxes[2].textContent = `📄 ${T.pdfs} 份资料`;
+        }
+      }
+    }
+
+    function _openChapterModal({ title = '', chIdx = null } = {}) {
+      const modal = document.getElementById('modal-container');
+      const overlay = document.getElementById('modal-overlay');
+      modal.innerHTML = `
+        <div class="modal-box">
+          <h2 style="margin:0 0 16px 0;font-size:18px;">${chIdx == null ? '➕ 添加章节' : '✏️ 编辑章节名称'}</h2>
+          <div class="form-group">
+            <label>章节名称 *</label>
+            <input id="modal-chapter-title" placeholder="例如：第一章 基础知识" value="${escapeAttr(title)}">
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+            <button class="btn btn-primary" id="modal-chapter-ok">确定</button>
+          </div>
+        </div>`;
+      overlay.classList.remove('hidden');
+      setTimeout(() => document.getElementById('modal-chapter-title').focus(), 50);
+      document.getElementById('modal-chapter-ok').onclick = () => {
+        const v = document.getElementById('modal-chapter-title').value.trim();
+        if (!v) { alert('请输入章节名称'); return; }
+        if (chIdx == null) {
+          chapterMgmtDraft = chapterMgmtDraft || [];
+          chapterMgmtDraft.push({
+            id: 'ch_' + Date.now() + '_' + Math.floor(Math.random() * 1e6),
+            title: v,
+            lessons: [],
+            pdfs: [],
+          });
+        } else {
+          chapterMgmtDraft[chIdx].title = v;
+        }
+        closeModal();
+        _render();
+      };
+    }
+
+    function _openLessonModal({ chIdx, lessonIdx = null } = {}) {
+      const ch = chapterMgmtDraft[chIdx];
+      if (!ch) return;
+      const item = lessonIdx == null ? { title: '', videoUrl: '', duration: 0, free: false } : (ch.lessons[lessonIdx] || {});
+      const modal = document.getElementById('modal-container');
+      const overlay = document.getElementById('modal-overlay');
+      modal.innerHTML = `
+        <div class="modal-box">
+          <h2 style="margin:0 0 16px 0;font-size:18px;">${lessonIdx == null ? '🎬 添加课时（视频）' : '✏️ 编辑课时'}</h2>
+          <div class="form-group">
+            <label>课时名称 *</label>
+            <input id="modal-lesson-title" placeholder="例如：1.1 课程介绍" value="${escapeAttr(item.title || '')}">
+          </div>
+          <div class="form-group">
+            <label>视频地址 / 文件路径 *</label>
+            <input id="modal-lesson-url" placeholder="http(s):// 或 本地文件完整路径，如 E:\\videos\\xx.mp4" value="${escapeAttr(item.videoUrl || item.path || '')}">
+            <div style="font-size:12px;color:#94a3b8;margin-top:4px;">支持 http / https / 文件路径（建议放在本地可访问路径）</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            <div class="form-group">
+              <label>时长（秒，可选）</label>
+              <input id="modal-lesson-dur" type="number" min="0" step="1" value="${Number(item.duration || 0) || ''}" placeholder="例如：3600">
+            </div>
+            <div class="form-group" style="display:flex;align-items:flex-end;gap:8px;">
+              <label style="margin:0;display:flex;align-items:center;gap:6px;">
+                <input id="modal-lesson-free" type="checkbox" ${item.free || item.isFree ? 'checked' : ''}>
+                <span style="font-size:13px;">标记为免费试看</span>
+              </label>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+            <button class="btn btn-primary" id="modal-lesson-ok">确定</button>
+          </div>
+        </div>`;
+      overlay.classList.remove('hidden');
+      setTimeout(() => document.getElementById('modal-lesson-title').focus(), 50);
+      document.getElementById('modal-lesson-ok').onclick = () => {
+        const title = document.getElementById('modal-lesson-title').value.trim();
+        const url = document.getElementById('modal-lesson-url').value.trim();
+        const dur = Number(document.getElementById('modal-lesson-dur').value) || 0;
+        const free = document.getElementById('modal-lesson-free').checked;
+        if (!title) { alert('请输入课时名称'); return; }
+        if (!url) { alert('请输入视频地址或路径'); return; }
+        const data = {
+          id: item.id || ('l_' + Date.now() + '_' + Math.floor(Math.random() * 1e6)),
+          title, videoUrl: url, path: url, duration: dur, free,
+        };
+        if (lessonIdx == null) {
+          ch.lessons = ch.lessons || [];
+          ch.lessons.push(data);
+        } else {
+          ch.lessons[lessonIdx] = { ...(ch.lessons[lessonIdx] || {}), ...data };
+        }
+        closeModal();
+        _render();
+      };
+    }
+
+    function _openPdfModal({ chIdx, pdfIdx = null } = {}) {
+      const ch = chapterMgmtDraft[chIdx];
+      if (!ch) return;
+      const item = pdfIdx == null ? { name: '', url: '' } : (ch.pdfs[pdfIdx] || {});
+      const modal = document.getElementById('modal-container');
+      const overlay = document.getElementById('modal-overlay');
+      modal.innerHTML = `
+        <div class="modal-box">
+          <h2 style="margin:0 0 16px 0;font-size:18px;">${pdfIdx == null ? '📄 添加资料文档' : '✏️ 编辑资料'}</h2>
+          <div class="form-group">
+            <label>资料名称 *</label>
+            <input id="modal-pdf-name" placeholder="例如：课程配套讲义.pdf" value="${escapeAttr(item.name || item.path || '')}">
+          </div>
+          <div class="form-group">
+            <label>资料地址 / 文件路径 *</label>
+            <input id="modal-pdf-url" placeholder="http(s):// 或 本地文件路径，支持 pdf/doc/ppt/xls 等" value="${escapeAttr(item.url || item.path || '')}">
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+            <button class="btn btn-primary" id="modal-pdf-ok">确定</button>
+          </div>
+        </div>`;
+      overlay.classList.remove('hidden');
+      setTimeout(() => document.getElementById('modal-pdf-name').focus(), 50);
+      document.getElementById('modal-pdf-ok').onclick = () => {
+        const name = document.getElementById('modal-pdf-name').value.trim();
+        const url = document.getElementById('modal-pdf-url').value.trim();
+        if (!name) { alert('请输入资料名称'); return; }
+        if (!url) { alert('请输入资料地址或路径'); return; }
+        const data = {
+          id: item.id || ('p_' + Date.now() + '_' + Math.floor(Math.random() * 1e6)),
+          name, url, path: url,
+        };
+        if (pdfIdx == null) {
+          ch.pdfs = ch.pdfs || [];
+          ch.pdfs.push(data);
+        } else {
+          ch.pdfs[pdfIdx] = { ...(ch.pdfs[pdfIdx] || {}), ...data };
+        }
+        closeModal();
+        _render();
+      };
+    }
+
+    function _bindChapterMgmtEvents() {
+      const container = document.getElementById('course-management');
+      if (!container) return;
+      container.onclick = null;
+      container.addEventListener('click', async (ev) => {
+        const t = ev.target;
+        if (!(t instanceof HTMLElement)) return;
+        const btn = t.closest('button');
+        if (!btn) return;
+        const act = btn.getAttribute('data-act');
+        const chIdxStr = btn.getAttribute('data-ch');
+        const idxStr = btn.getAttribute('data-idx');
+        const chIdx = chIdxStr == null ? null : Number(chIdxStr);
+        const idx = idxStr == null ? null : Number(idxStr);
+
+        if (btn.id === 'btn-add-chapter-top' || btn.id === 'btn-add-chapter-empty') {
+          _openChapterModal({});
+          return;
+        }
+        if (btn.id === 'btn-save-chapters') {
+          btn.disabled = true;
+          btn.textContent = '⏳ 正在保存...';
+          try {
+            const r = await _saveChaptersDraftToDb();
+            if (r && r.success !== false) {
+              alert('✅ 保存成功！章节、课时、资料已写入数据库');
+              chapterMgmtOrigDetail = await api.getCourseDetail(currentChapterMgmtCourseId);
+              chapterMgmtDraft = _chaptersDeepClone(chapterMgmtOrigDetail?.chapters || []);
+            } else {
+              alert('❌ 保存失败：' + ((r && r.error) || '未知错误'));
+            }
+          } catch (e) {
+            alert('❌ 保存异常：' + (e.message || e));
+          } finally {
+            btn.disabled = false;
+            btn.textContent = '💾 保存修改到数据库';
+            _render();
+          }
+          return;
+        }
+        if (btn.id === 'btn-reset-chapters') {
+          if (!confirm('确认撤销所有未保存的修改，恢复到原始数据？')) return;
+          chapterMgmtDraft = _chaptersDeepClone(chapterMgmtOrigDetail?.chapters || []);
+          _render();
+          return;
+        }
+
+        if (chIdx == null || !(chapterMgmtDraft[chIdx])) return;
+
+        if (act === 'edit-chapter') {
+          _openChapterModal({ title: chapterMgmtDraft[chIdx].title || '', chIdx });
+        } else if (act === 'del-chapter') {
+          if (!confirm(`确认删除章节「${chapterMgmtDraft[chIdx].title || '第' + (chIdx + 1) + '章'}」？该章节下的所有课时和资料也会被删除。`)) return;
+          chapterMgmtDraft.splice(chIdx, 1);
+          _render();
+        } else if (act === 'move-chapter-up') {
+          if (chIdx === 0) { alert('已经是第一章了'); return; }
+          const tmp = chapterMgmtDraft[chIdx]; chapterMgmtDraft[chIdx] = chapterMgmtDraft[chIdx - 1]; chapterMgmtDraft[chIdx - 1] = tmp;
+          _render();
+        } else if (act === 'move-chapter-down') {
+          if (chIdx === chapterMgmtDraft.length - 1) { alert('已经是最后一章了'); return; }
+          const tmp = chapterMgmtDraft[chIdx]; chapterMgmtDraft[chIdx] = chapterMgmtDraft[chIdx + 1]; chapterMgmtDraft[chIdx + 1] = tmp;
+          _render();
+        } else if (act === 'add-lesson') {
+          _openLessonModal({ chIdx });
+        } else if (act === 'edit-lesson') {
+          _openLessonModal({ chIdx, lessonIdx: idx });
+        } else if (act === 'del-lesson') {
+          const l = chapterMgmtDraft[chIdx].lessons[idx];
+          if (!l) return;
+          if (!confirm(`确认删除课时「${l.title || '未命名'}」？`)) return;
+          chapterMgmtDraft[chIdx].lessons.splice(idx, 1);
+          _render();
+        } else if (act === 'add-pdf') {
+          _openPdfModal({ chIdx });
+        } else if (act === 'edit-pdf') {
+          _openPdfModal({ chIdx, pdfIdx: idx });
+        } else if (act === 'del-pdf') {
+          const p = chapterMgmtDraft[chIdx].pdfs[idx];
+          if (!p) return;
+          if (!confirm(`确认删除资料「${p.name || '未命名'}」？`)) return;
+          chapterMgmtDraft[chIdx].pdfs.splice(idx, 1);
+          _render();
+        }
+      });
+    }
 
     const container = document.getElementById('course-management');
     if (!container) return;
 
-    // 把返回按钮 + 标题 + 统计胶囊放到顶部 page-header 中
     const pageHeader = document.querySelector('#page-course-mgmt > .page-header');
     if (pageHeader) {
       let backBtn = pageHeader.querySelector('#chapters-mgmt-back');
@@ -2087,8 +2419,8 @@ async function openChapterMgmt(courseId) {
       const addBtnWrap = pageHeader.querySelector('.header-actions');
       if (addBtnWrap) addBtnWrap.style.display = 'none';
 
-      // 插入标题+统计行（占据中间空间，左右两端对齐）
       let statsBar = pageHeader.querySelector('#chapters-mgmt-stats');
+      const T0 = _totals();
       if (!statsBar) {
         statsBar = document.createElement('div');
         statsBar.id = 'chapters-mgmt-stats';
@@ -2099,35 +2431,38 @@ async function openChapterMgmt(courseId) {
             ${detail.subtitle ? `<p style="margin:4px 0 0 0;color:#64748b;font-size:13px;">${escapeHtml(detail.subtitle)}</p>` : ''}
           </div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <div style="background:#eef2ff;padding:6px 14px;border-radius:16px;font-size:12px;color:#4338ca;font-weight:600;">📚 ${chapters.length} 章</div>
-            <div style="background:#fef3c7;padding:6px 14px;border-radius:16px;font-size:12px;color:#b45309;font-weight:600;">🎬 ${totalLessons} 个课时</div>
-            <div style="background:#ecfdf5;padding:6px 14px;border-radius:16px;font-size:12px;color:#047857;font-weight:600;">📄 ${totalPdfs} 份资料</div>
+            <div data-stat-box style="background:#eef2ff;padding:6px 14px;border-radius:16px;font-size:12px;color:#4338ca;font-weight:600;">📚 ${T0.chapters} 章</div>
+            <div data-stat-box style="background:#fef3c7;padding:6px 14px;border-radius:16px;font-size:12px;color:#b45309;font-weight:600;">🎬 ${T0.lessons} 个课时</div>
+            <div data-stat-box style="background:#ecfdf5;padding:6px 14px;border-radius:16px;font-size:12px;color:#047857;font-weight:600;">📄 ${T0.pdfs} 份资料</div>
             <div style="background:#f0f9ff;padding:6px 14px;border-radius:16px;font-size:12px;color:#0369a1;font-weight:600;">👨‍🏫 ${escapeHtml(detail.instructor || '--')}</div>
           </div>
         `;
-        // 插入到返回按钮后面
         pageHeader.insertBefore(statsBar, backBtn.nextSibling);
       }
     }
-    container.innerHTML = html;
 
-    const backBtn = document.getElementById('chapters-mgmt-back');
-    if (backBtn) backBtn.addEventListener('click', () => {
-      // 恢复标题和添加课程按钮，清理统计行
-      const pageHeader = document.querySelector('#page-course-mgmt > .page-header');
-      if (pageHeader) {
-        const b = pageHeader.querySelector('#chapters-mgmt-back');
-        if (b) b.remove();
-        const s = pageHeader.querySelector('#chapters-mgmt-stats');
-        if (s) s.remove();
-        const h2 = pageHeader.querySelector('h2');
-        if (h2) { h2.style.display = ''; h2.textContent = '课程管理'; }
-        const addBtnWrap = pageHeader.querySelector('.header-actions');
-        if (addBtnWrap) addBtnWrap.style.display = '';
-      }
-      loadCourseMgmt();
-    });
+    backBtn = document.getElementById('chapters-mgmt-back');
+    if (backBtn) {
+      backBtn.onclick = null;
+      backBtn.addEventListener('click', () => {
+        const pageHeader = document.querySelector('#page-course-mgmt > .page-header');
+        if (pageHeader) {
+          const b = pageHeader.querySelector('#chapters-mgmt-back');
+          if (b) b.remove();
+          const s = pageHeader.querySelector('#chapters-mgmt-stats');
+          if (s) s.remove();
+          const h2 = pageHeader.querySelector('h2');
+          if (h2) { h2.style.display = ''; h2.textContent = '课程管理'; }
+          const addBtnWrap = pageHeader.querySelector('.header-actions');
+          if (addBtnWrap) addBtnWrap.style.display = '';
+        }
+        chapterMgmtDraft = null;
+        chapterMgmtOrigDetail = null;
+        loadCourseMgmt();
+      });
+    }
 
+    _render();
   } catch (e) {
     console.error('[chapters-mgmt]', e);
     alert('加载章节失败: ' + (e.message || '未知错误'));
