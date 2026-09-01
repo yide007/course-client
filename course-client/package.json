@@ -1,0 +1,115 @@
+{
+  "name": "course-client",
+  "version": "1.0.0",
+  "description": "在线课程学习平台客户端",
+  "main": "main.js",
+  "author": "Course Team",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win --x64",
+    "dist:win": "electron-builder --win --x64",
+    "dist:portable": "electron-builder --win portable --x64"
+  },
+  "keywords": [
+    "course",
+    "electron",
+    "video-player"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "@andie/cd2": "file:./packages/cd2",
+    "@grpc/grpc-js": "^1.10.6",
+    "@grpc/proto-loader": "^0.8.1",
+    "express": "^5.2.1",
+    "grpc-js-reflection-client": "^1.4.1",
+    "sql.js": "^1.14.2",
+    "webdav": "^5.10.0"
+  },
+  "build": {
+    "appId": "com.course.client.app",
+    "productName": "在线课程学习平台",
+    "copyright": "Copyright © 2025",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/sql.js/**/*",
+      "node_modules/@andie/cd2/**/*",
+      "node_modules/sql.js/dist/*.wasm",
+      "packages/**/*"
+    ],
+    "compression": "maximum",
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/",
+      "customDir": "v44.0.0"
+    },
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "database.js",
+      "course-db.js",
+      "sync-service.js",
+      "config.js",
+      "courses_data.json",
+      "cd2-course.js",
+      "clouddrive.proto",
+      "api_guide.html",
+      "api_guide.md",
+      "packages/**/*",
+      "src/**/*",
+      "assets/**/*",
+      "!dist/**/*",
+      "!*.log"
+    ],
+    "extraResources": [
+      {
+        "from": "src/images",
+        "to": "images",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "courses_data.json",
+        "to": "courses_data.json"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-${arch}-${os}.${ext}",
+      "sign": null,
+      "signAndEditExecutable": false,
+      "verifyUpdateCodeSignature": false,
+      "rfc3161TimeStampServer": "",
+      "timeStampServer": ""
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "在线课程学习平台"
+    }
+  }
+}

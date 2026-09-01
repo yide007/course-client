@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>在线课程学习平台</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <h1>📚 课程平台</h1>
+      </div>
+      <nav id="nav-menu">
+        <a class="nav-item active" data-page="courses">📖 全部课程</a>
+        <div id="category-list" class="category-list"></div>
+        <a class="nav-item" data-page="course-mgmt">📚 课程管理</a>
+        <a class="nav-item" data-page="categories">📁 分类管理</a>
+        <a class="nav-item" data-page="students">👥 学员管理</a>
+        <a class="nav-item" data-page="stats">📊 学习统计</a>
+      </nav>
+      <div class="sidebar-toggle">
+        <label class="toggle-label" for="local-sync-toggle">
+          <span class="toggle-text">📡 同步模式开关</span>
+          <div class="toggle-switch mode-toggle-switch">
+            <span class="toggle-mode-label toggle-mode-ip">IP</span>
+            <input type="checkbox" id="local-sync-toggle">
+            <span class="toggle-slider"></span>
+            <span class="toggle-mode-label toggle-mode-domain">域名</span>
+          </div>
+        </label>
+        <span class="toggle-hint" id="local-sync-hint">域名同步：使用云盘服务器地址播放</span>
+      </div>
+      <div class="sidebar-footer">
+        <span id="app-version">v1.0.0</span>
+      </div>
+    </aside>
+
+    <main id="main-content">
+      <!-- 课程列表页 -->
+      <section id="page-courses" class="page active">
+        <div class="page-header">
+          <h2>全部课程</h2>
+          <div class="header-actions">
+              <button id="btn-add-course" class="btn btn-primary">+ 添加课程</button>
+            </div>
+        </div>
+        <div class="search-bar">
+          <input type="text" id="search-keyword" placeholder="搜索课程名称、讲师...">
+          <select id="filter-level">
+            <option value="">全部难度</option>
+            <option value="初级">初级</option>
+            <option value="中级">中级</option>
+            <option value="高级">高级</option>
+          </select>
+          <button id="btn-search" class="btn btn-secondary">搜索</button>
+        </div>
+        <div id="course-list" class="course-grid"></div>
+      </section>
+
+      <!-- 课程详情页 -->
+      <section id="page-detail" class="page">
+        <div class="page-header">
+          <h2 id="detail-title"></h2>
+        </div>
+        <div id="detail-layout" class="detail-layout">
+          <div class="detail-left">
+            <div class="detail-card">
+              <div id="detail-chapters-header"></div>
+              <div id="detail-chapters"></div>
+            </div>
+          </div>
+          <div class="detail-right">
+            <div class="detail-card">
+              <div class="detail-player-header">
+                <h3 class="detail-card-title-video">视频播放</h3>
+                <div id="detail-player-subtitle" class="detail-player-subtitle"></div>
+              </div>
+              <div id="detail-player-area" class="detail-player-area" style="position:relative;">
+                <div id="detail-player-cover" class="detail-player-cover" style="display:none;">
+                  <img id="detail-player-cover-img" alt="课程封面" style="width:100%;height:100%;object-fit:cover;display:block;">
+                  <div class="detail-player-cover-mask">
+                    <div class="detail-player-cover-play">
+                      <span style="font-size:28px;">▶</span>
+                    </div>
+                  </div>
+                </div>
+                <video id="detail-player" controls preload="auto" playsinline webkit-playsinline x5-playsinline style="width:100%;" crossorigin="anonymous"></video>
+              </div>
+            </div>
+            <div class="detail-card">
+              <h3>课程简介</h3>
+              <div id="detail-description" class="detail-description"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 统计页 -->
+      <section id="page-stats" class="page">
+        <div class="page-header"><h2>学习统计</h2></div>
+        <div id="stats-content" class="stats-grid"></div>
+      </section>
+
+      <!-- 课程管理页 -->
+      <section id="page-course-mgmt" class="page">
+        <div class="page-header">
+          <h2>课程管理</h2>
+          <div class="header-actions">
+            <button id="btn-mgmt-add-course" class="btn btn-primary">+ 添加课程</button>
+          </div>
+        </div>
+        <div id="course-management"></div>
+      </section>
+
+      <!-- 分类管理页 -->
+      <section id="page-categories" class="page">
+        <div class="page-header">
+          <h2>分类管理</h2>
+          <div class="header-actions">
+            <button id="btn-add-category" class="btn btn-primary">+ 添加分类</button>
+          </div>
+        </div>
+        <div id="category-management"></div>
+        <hr style="margin:20px 0;border:none;border-top:1px solid var(--border);">
+        <div id="course-category-mgmt"></div>
+      </section>
+
+      <!-- 学员管理页 -->
+      <section id="page-students" class="page">
+        <div class="page-header">
+          <h2>学员管理</h2>
+          <div class="header-actions">
+            <button id="btn-add-student" class="btn btn-primary">+ 添加学员</button>
+          </div>
+        </div>
+        <div id="student-management">
+          <div class="empty-state">
+            <p style="text-align:center;color:#94a3b8;padding:60px 20px;font-size:15px;">📋 暂无学员数据，点击右上角添加学员</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 模态框容器 -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div id="modal-container" class="modal-container"></div>
+  </div>
+
+  <!-- 视频播放器模态框 -->
+  <div id="video-overlay" class="modal-overlay hidden">
+    <div class="video-container">
+      <button id="btn-close-video" class="btn-close">✕</button>
+      <video id="video-player" controls autoplay preload="auto" playsinline webkit-playsinline x5-playsinline style="width:100%;max-height:80vh;" crossorigin="anonymous"></video>
+      <div class="video-info">
+        <h3 id="video-title"></h3>
+        <div class="video-progress-bar">
+          <input type="range" id="video-progress-slider" min="0" max="100" value="0" step="0.1">
+          <span id="video-progress-text">0%</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
