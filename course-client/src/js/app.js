@@ -638,7 +638,7 @@ async function viewCourseDetail(courseId) {
     const contentBtn = document.getElementById('btn-manage-content');
     if (contentBtn) {
       contentBtn.addEventListener('click', () => {
-        switchPage('course-mgmt');
+        navigateTo('course-mgmt');
         openChapterMgmt(detail.id);
       });
     }
