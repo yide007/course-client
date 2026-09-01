@@ -2143,6 +2143,26 @@ async function openChapterMgmt(courseId) {
       }
     }
 
+    function _modalInputFocusFix(defaultId) {
+      try { if (window.focus) window.focus(); } catch (_) {}
+      const container = document.getElementById('modal-container');
+      if (!container) return;
+      const focusables = container.querySelectorAll('input, textarea, select');
+      focusables.forEach(function (el) {
+        el.addEventListener('click', function () { try { el.focus(); if (el.select) el.select(); } catch (_) {} });
+        el.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      });
+      if (defaultId) {
+        const tryFocus = function () {
+          try {
+            const el = document.getElementById(defaultId);
+            if (el) { el.focus(); if (el.select) el.select(); }
+          } catch (_) {}
+        };
+        [0, 80, 250, 450].forEach(function (t) { setTimeout(tryFocus, t); });
+      }
+    }
+
     function _openChapterModal({ title = '', chIdx = null } = {}) {
       const modal = document.getElementById('modal-container');
       const overlay = document.getElementById('modal-overlay');
@@ -2159,7 +2179,7 @@ async function openChapterMgmt(courseId) {
           </div>
         </div>`;
       overlay.classList.remove('hidden');
-      setTimeout(() => document.getElementById('modal-chapter-title').focus(), 50);
+      _modalInputFocusFix('modal-chapter-title');
       document.getElementById('modal-chapter-ok').onclick = () => {
         const v = document.getElementById('modal-chapter-title').value.trim();
         if (!v) { alert('请输入章节名称'); return; }
@@ -2215,7 +2235,7 @@ async function openChapterMgmt(courseId) {
           </div>
         </div>`;
       overlay.classList.remove('hidden');
-      setTimeout(() => document.getElementById('modal-lesson-title').focus(), 50);
+      _modalInputFocusFix('modal-lesson-title');
       document.getElementById('modal-lesson-ok').onclick = () => {
         const title = document.getElementById('modal-lesson-title').value.trim();
         const url = document.getElementById('modal-lesson-url').value.trim();
@@ -2261,7 +2281,7 @@ async function openChapterMgmt(courseId) {
           </div>
         </div>`;
       overlay.classList.remove('hidden');
-      setTimeout(() => document.getElementById('modal-pdf-name').focus(), 50);
+      _modalInputFocusFix('modal-pdf-name');
       document.getElementById('modal-pdf-ok').onclick = () => {
         const name = document.getElementById('modal-pdf-name').value.trim();
         const url = document.getElementById('modal-pdf-url').value.trim();

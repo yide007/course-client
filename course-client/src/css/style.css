@@ -1749,6 +1749,59 @@ body {
   box-shadow: 0 0 0 2px rgba(79,70,229,.2);
 }
 
+/* ---- Electron 输入框可编辑性强制修复 ---- */
+html, body, #app {
+  user-select: auto;
+  -webkit-user-select: auto;
+  -webkit-user-drag: none;
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea,
+.modal-container input,
+.modal-container select,
+.modal-container textarea {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  pointer-events: auto !important;
+  -webkit-appearance: none;
+  appearance: none;
+  caret-color: auto;
+}
+
+.modal-overlay,
+.modal-container {
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.modal-container > * {
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.modal-container input,
+.modal-container select,
+.modal-container textarea {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.modal-container input:focus,
+.modal-container select:focus,
+.modal-container textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(79,70,229,.2);
+}
+
+/* 防止全局拖拽属性误伤可输入元素 */
+input, textarea, select, [contenteditable="true"] {
+  -webkit-app-region: no-drag;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .form-actions {
   display: flex;
   gap: 8px;
