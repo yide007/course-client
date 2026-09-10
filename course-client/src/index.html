@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿﻿﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -7,7 +7,37 @@
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <div id="app">
+  <!-- 登录页面 -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-bg"></div>
+    <div class="login-box">
+      <div class="login-logo">📚</div>
+      <h1 class="login-title">在线课程学习平台</h1>
+      <p class="login-subtitle">Course Learning Platform</p>
+      <div class="login-form">
+        <div class="login-field">
+          <span class="login-field-icon">👤</span>
+          <input type="text" id="login-username" placeholder="请输入账号" autocomplete="username">
+        </div>
+        <div class="login-field">
+          <span class="login-field-icon">🔒</span>
+          <input type="password" id="login-password" placeholder="请输入密码" autocomplete="current-password">
+        </div>
+        <label class="login-remember">
+          <input type="checkbox" id="login-remember" checked>
+          <span>7天内自动登录</span>
+        </label>
+        <button id="login-submit-btn" class="login-btn">登 录</button>
+        <p id="login-error-msg" class="login-error"></p>
+        <p class="login-tip">管理员：admin / admin123 ｜ 普通用户：user / user123</p>
+      </div>
+      <div class="login-footer">
+        <span>© 2026 课程学习平台 · v1.0.0</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="app" style="display:none;">
     <aside id="sidebar">
       <div class="sidebar-header">
         <h1>📚 课程平台</h1>
@@ -15,12 +45,13 @@
       <nav id="nav-menu">
         <a class="nav-item active" data-page="courses">📖 全部课程</a>
         <div id="category-list" class="category-list"></div>
-        <a class="nav-item" data-page="course-mgmt">📚 课程管理</a>
-        <a class="nav-item" data-page="categories">📁 分类管理</a>
-        <a class="nav-item" data-page="students">👥 学员管理</a>
-        <a class="nav-item" data-page="stats">📊 学习统计</a>
+        <a class="nav-item" data-page="course-mgmt" data-role="admin">📚 课程管理</a>
+        <a class="nav-item" data-page="categories" data-role="admin">📁 分类管理</a>
+        <a class="nav-item" data-page="users" data-role="admin">👥 用户/管理员管理</a>
+        <a class="nav-item" data-page="upload-config" data-role="admin">📤 上传配置</a>
+        <a class="nav-item" data-page="stats" data-role="admin">📊 学习统计</a>
       </nav>
-      <div class="sidebar-toggle">
+      <div class="sidebar-toggle" data-role="admin">
         <label class="toggle-label" for="local-sync-toggle">
           <span class="toggle-text">📡 同步模式开关</span>
           <div class="toggle-switch mode-toggle-switch">
@@ -33,6 +64,17 @@
         <span class="toggle-hint" id="local-sync-hint">域名同步：使用云盘服务器地址播放</span>
       </div>
       <div class="sidebar-footer">
+        <div class="user-info" id="user-info">
+          <div class="user-avatar" id="user-avatar">A</div>
+          <div class="user-detail">
+            <div class="user-name" id="user-name">管理员</div>
+            <div class="user-actions">
+              <a href="#" id="user-change-pwd" class="user-action-link">修改密码</a>
+              <span class="user-action-sep">·</span>
+              <a href="#" id="user-logout" class="user-action-link">退出登录</a>
+            </div>
+          </div>
+        </div>
         <span id="app-version">v1.0.0</span>
       </div>
     </aside>
@@ -43,7 +85,7 @@
         <div class="page-header">
           <h2>全部课程</h2>
           <div class="header-actions">
-              <button id="btn-add-course" class="btn btn-primary">+ 添加课程</button>
+              <button id="btn-add-course" class="btn btn-primary" data-role="admin">+ 添加课程</button>
             </div>
         </div>
         <div class="search-bar">
@@ -86,7 +128,11 @@
                     </div>
                   </div>
                 </div>
-                <video id="detail-player" controls preload="auto" playsinline webkit-playsinline x5-playsinline style="width:100%;" crossorigin="anonymous"></video>
+                <video id="detail-player" preload="metadata" playsinline webkit-playsinline x5-playsinline style="width:100%;"></video>
+              </div>
+              <div class="video-progress-bar" style="margin-top:6px;">
+                <input type="range" id="detail-progress-slider" min="0" max="100" value="0" step="0.1">
+                <span id="detail-progress-text">0%</span>
               </div>
             </div>
             <div class="detail-card">
@@ -98,13 +144,13 @@
       </section>
 
       <!-- 统计页 -->
-      <section id="page-stats" class="page">
+      <section id="page-stats" class="page" data-role="admin">
         <div class="page-header"><h2>学习统计</h2></div>
         <div id="stats-content" class="stats-grid"></div>
       </section>
 
       <!-- 课程管理页 -->
-      <section id="page-course-mgmt" class="page">
+      <section id="page-course-mgmt" class="page" data-role="admin">
         <div class="page-header">
           <h2>课程管理</h2>
           <div class="header-actions">
@@ -115,7 +161,7 @@
       </section>
 
       <!-- 分类管理页 -->
-      <section id="page-categories" class="page">
+      <section id="page-categories" class="page" data-role="admin">
         <div class="page-header">
           <h2>分类管理</h2>
           <div class="header-actions">
@@ -127,18 +173,31 @@
         <div id="course-category-mgmt"></div>
       </section>
 
-      <!-- 学员管理页 -->
-      <section id="page-students" class="page">
+      <!-- 用户管理页 -->
+      <section id="page-users" class="page" data-role="admin">
         <div class="page-header">
-          <h2>学员管理</h2>
+          <h2>用户/管理员管理</h2>
           <div class="header-actions">
-            <button id="btn-add-student" class="btn btn-primary">+ 添加学员</button>
+            <button id="btn-add-user" class="btn btn-primary">+ 添加用户</button>
           </div>
         </div>
-        <div id="student-management">
+        <div id="user-management">
           <div class="empty-state">
-            <p style="text-align:center;color:#94a3b8;padding:60px 20px;font-size:15px;">📋 暂无学员数据，点击右上角添加学员</p>
+            <p style="text-align:center;color:#94a3b8;padding:60px 20px;font-size:15px;">📋 加载中...</p>
           </div>
+        </div>
+      </section>
+
+      <!-- 上传配置页 -->
+      <section id="page-upload-config" class="page" data-role="admin">
+        <div class="page-header">
+          <h2>上传配置</h2>
+          <div class="header-actions">
+            <button id="btn-add-upload-config" class="btn btn-primary">+ 添加配置</button>
+          </div>
+        </div>
+        <div id="upload-config-list">
+          <p style="text-align:center;color:#94a3b8;padding:40px;">暂无上传配置，点击右上角添加</p>
         </div>
       </section>
     </main>
@@ -153,7 +212,7 @@
   <div id="video-overlay" class="modal-overlay hidden">
     <div class="video-container">
       <button id="btn-close-video" class="btn-close">✕</button>
-      <video id="video-player" controls autoplay preload="auto" playsinline webkit-playsinline x5-playsinline style="width:100%;max-height:80vh;" crossorigin="anonymous"></video>
+      <video id="video-player" controls autoplay preload="metadata" playsinline webkit-playsinline x5-playsinline style="width:100%;max-height:80vh;"></video>
       <div class="video-info">
         <h3 id="video-title"></h3>
         <div class="video-progress-bar">
@@ -164,6 +223,13 @@
     </div>
   </div>
 
+  <!-- 拆分模块加载顺序（依赖链：player → auth → list → detail → source → mgmt → entry） -->
+  <script src="js/player.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/course-list.js"></script>
+  <script src="js/course-detail.js"></script>
+  <script src="js/source-mgmt.js"></script>
+  <script src="js/course-mgmt.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

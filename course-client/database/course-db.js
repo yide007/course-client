@@ -16,6 +16,9 @@ let data = {
   nextChapterId: 1,
   nextLessonId: 1,
   courses: [],
+  categories: [],
+  nextCategoryId: 1,
+  learningProgress: [],
 };
 
 /**
@@ -101,15 +104,26 @@ function saveJson() {
 // ============================================================
 
 async function initCourseDatabase() {
-  // 尝试加载已有 JSON，若不存在则从旧 SQLite 迁移
   const loaded = loadJson();
-  if (loaded && data.courses.length > 0) {
-    console.log(`[course-db] 已加载 JSON，共 ${data.courses.length} 门课程`);
+
+  const needsCategories = !loaded || !Array.isArray(data.categories);
+  const needsProgress = !loaded || !Array.isArray(data.learningProgress);
+
+  if (loaded && !needsCategories && !needsProgress) {
+    console.log(
+      `[course-db] 已加载 JSON，${data.courses.length} 门课程，` +
+      `${data.categories.length} 个分类，${data.learningProgress.length} 条学习记录`
+    );
+    _seedDefaultCategoriesIfEmpty();
     return;
   }
 
-  // JSON 为空，尝试从旧 SQLite 数据库迁移
-  await migrateFromOldDb();
+  if (needsCategories) data.categories = [];
+  if (needsProgress) data.learningProgress = [];
+
+  await migrateFromOldDb(needsCategories, needsProgress);
+  _seedDefaultCategoriesIfEmpty();
+
   saveJson();
 }
 
@@ -134,7 +148,7 @@ function getOldDbPath() {
   return localPath;
 }
 
-async function migrateFromOldDb() {
+async function migrateFromOldDb(migrateCats, migrateProg) {
   const oldDbPath = getOldDbPath();
   if (!fs.existsSync(oldDbPath)) {
     console.log('[course-db] 未发现旧数据库，跳过迁移');
@@ -158,120 +172,166 @@ async function migrateFromOldDb() {
     const tableCheck = oldDb.exec(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='courses'"
     );
-    if (!tableCheck || tableCheck.length === 0) {
-      console.log('[course-db] 旧数据库无 courses 表，跳过迁移');
-      return;
-    }
+    const hasCourses = tableCheck && tableCheck.length > 0;
 
-    // 读取课程
-    const oldCourses = [];
-    const stmt = oldDb.prepare('SELECT * FROM courses ORDER BY id');
-    while (stmt.step()) oldCourses.push(stmt.getAsObject());
-    stmt.free();
+    if (hasCourses) {
+      const oldCourses = [];
+      const stmt = oldDb.prepare('SELECT * FROM courses ORDER BY id');
+      while (stmt.step()) oldCourses.push(stmt.getAsObject());
+      stmt.free();
 
-    if (oldCourses.length === 0) {
-      console.log('[course-db] 旧数据库无课程数据，跳过迁移');
-      return;
-    }
+      if (oldCourses.length > 0) {
+        console.log(`[course-db] 发现 ${oldCourses.length} 门旧课程，开始迁移到 JSON...`);
 
-    console.log(`[course-db] 发现 ${oldCourses.length} 门旧课程，开始迁移到 JSON...`);
+        let maxId = 0, maxChId = 0, maxLId = 0;
 
-    let maxId = 0,
-      maxChId = 0,
-      maxLId = 0;
+        for (const oc of oldCourses) {
+          if (oc.id > maxId) maxId = oc.id;
+          const course = {
+            id: oc.id,
+            category_id: oc.category_id || 1,
+            title: oc.title || '',
+            subtitle: oc.subtitle || '',
+            description: oc.description || '',
+            instructor: oc.instructor || '',
+            level: oc.level || '初级',
+            duration: oc.duration || '',
+            rating: Number(oc.rating) || 0,
+            students: Number(oc.students) || 0,
+            cover_color: oc.cover_color || '',
+            cover_image: oc.cover_image || '',
+            domain: oc.domain || '',
+            port: oc.port || '',
+            token: oc.token || '',
+            source_id: oc.source_id || null,
+            source_key: oc.source_key || null,
+            source_path: oc.source_path || '',
+            created_at: oc.created_at || new Date().toISOString(),
+            updated_at: oc.updated_at || new Date().toISOString(),
+            chapters: [],
+          };
 
-    for (const oc of oldCourses) {
-      if (oc.id > maxId) maxId = oc.id;
-      const course = {
-        id: oc.id,
-        category_id: oc.category_id || 1,
-        title: oc.title || '',
-        subtitle: oc.subtitle || '',
-        description: oc.description || '',
-        instructor: oc.instructor || '',
-        level: oc.level || '初级',
-        duration: oc.duration || '',
-        rating: Number(oc.rating) || 0,
-        students: Number(oc.students) || 0,
-        cover_color: oc.cover_color || '',
-        cover_image: oc.cover_image || '',
-        domain: oc.domain || '',
-        port: oc.port || '',
-        token: oc.token || '',
-        source_id: oc.source_id || null,
-        source_key: oc.source_key || null,
-        source_path: oc.source_path || '',
-        created_at: oc.created_at || new Date().toISOString(),
-        updated_at: oc.updated_at || new Date().toISOString(),
-        chapters: [],
-      };
+          const chStmt = oldDb.prepare(
+            'SELECT * FROM chapters WHERE course_id = ? ORDER BY sort_order'
+          );
+          chStmt.bind([oc.id]);
+          while (chStmt.step()) {
+            const och = chStmt.getAsObject();
+            if (och.id > maxChId) maxChId = och.id;
+            const chapter = {
+              id: och.id,
+              course_id: och.course_id,
+              title: och.title || '',
+              sort_order: och.sort_order || 0,
+              created_at: och.created_at || new Date().toISOString(),
+              lessons: [],
+            };
 
-      // 读取章节
-      const chStmt = oldDb.prepare(
-        'SELECT * FROM chapters WHERE course_id = ? ORDER BY sort_order'
-      );
-      chStmt.bind([oc.id]);
-      while (chStmt.step()) {
-        const och = chStmt.getAsObject();
-        if (och.id > maxChId) maxChId = och.id;
-        const chapter = {
-          id: och.id,
-          course_id: och.course_id,
-          title: och.title || '',
-          sort_order: och.sort_order || 0,
-          created_at: och.created_at || new Date().toISOString(),
-          lessons: [],
-        };
-
-        // 读取课时
-        const lStmt = oldDb.prepare(
-          'SELECT * FROM lessons WHERE chapter_id = ? ORDER BY sort_order'
-        );
-        lStmt.bind([och.id]);
-        while (lStmt.step()) {
-          const ol = lStmt.getAsObject();
-          if (ol.id > maxLId) maxLId = ol.id;
-          let attachments = null;
-          if (ol.attachments) {
-            try {
-              attachments = JSON.parse(ol.attachments);
-            } catch (e) {
-              attachments = ol.attachments;
+            const lStmt = oldDb.prepare(
+              'SELECT * FROM lessons WHERE chapter_id = ? ORDER BY sort_order'
+            );
+            lStmt.bind([och.id]);
+            while (lStmt.step()) {
+              const ol = lStmt.getAsObject();
+              if (ol.id > maxLId) maxLId = ol.id;
+              let attachments = null;
+              if (ol.attachments) {
+                try { attachments = JSON.parse(ol.attachments); } catch (_) { attachments = ol.attachments; }
+              }
+              chapter.lessons.push({
+                id: ol.id,
+                chapter_id: ol.chapter_id,
+                title: ol.title || '',
+                duration: ol.duration || '00:00',
+                video_url: ol.video_url || '',
+                video_url_local: ol.video_url_local || ol.video_url || '',
+                video_type: ol.video_type || 'local',
+                is_free: ol.is_free ? 1 : 0,
+                sort_order: ol.sort_order || 0,
+                attachments: attachments,
+                created_at: ol.created_at || new Date().toISOString(),
+              });
             }
+            lStmt.free();
+
+            chapter.lessons.sort((a, b) => a.sort_order - b.sort_order);
+            course.chapters.push(chapter);
           }
-          chapter.lessons.push({
-            id: ol.id,
-            chapter_id: ol.chapter_id,
-            title: ol.title || '',
-            duration: ol.duration || '00:00',
-            video_url: ol.video_url || '',
-            video_url_local: ol.video_url_local || ol.video_url || '',
-            video_type: ol.video_type || 'local',
-            is_free: ol.is_free ? 1 : 0,
-            sort_order: ol.sort_order || 0,
-            attachments: attachments,
-            created_at: ol.created_at || new Date().toISOString(),
-          });
+          chStmt.free();
+
+          course.chapters.sort((a, b) => a.sort_order - b.sort_order);
+          data.courses.push(course);
         }
-        lStmt.free();
 
-        chapter.lessons.sort((a, b) => a.sort_order - b.sort_order);
-        course.chapters.push(chapter);
+        data.nextId = maxId + 1;
+        data.nextChapterId = maxChId + 1;
+        data.nextLessonId = maxLId + 1;
+
+        console.log(`[course-db] 课程迁移完成：${oldCourses.length} 门课程`);
       }
-      chStmt.free();
-
-      course.chapters.sort((a, b) => a.sort_order - b.sort_order);
-      data.courses.push(course);
     }
 
-    data.nextId = maxId + 1;
-    data.nextChapterId = maxChId + 1;
-    data.nextLessonId = maxLId + 1;
+    // ---- 迁移 categories ----
+    if (migrateCats) {
+      const catCheck = oldDb.exec(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='categories'"
+      );
+      if (catCheck && catCheck.length > 0) {
+        const oldCats = [];
+        const catStmt = oldDb.prepare('SELECT * FROM categories ORDER BY id');
+        while (catStmt.step()) oldCats.push(catStmt.getAsObject());
+        catStmt.free();
 
-    saveJson();
-    console.log(
-      `[course-db] 迁移完成：${oldCourses.length} 门课程 → ${JSON_PATH}`
-    );
+        if (oldCats.length > 0) {
+          let maxCatId = 0;
+          for (const c of oldCats) {
+            if (c.id > maxCatId) maxCatId = c.id;
+            data.categories.push({
+              id: c.id,
+              name: c.name || '',
+              icon: c.icon || '',
+              sort_order: c.sort_order || 0,
+              created_at: c.created_at || new Date().toISOString(),
+            });
+          }
+          data.nextCategoryId = maxCatId + 1;
+          console.log(`[course-db] 分类迁移完成：${oldCats.length} 个分类`);
+        } else {
+          data.categories = [{ id: 1, name: '默认', icon: '📚', sort_order: 1, created_at: new Date().toISOString() }];
+          data.nextCategoryId = 2;
+        }
+      } else {
+        data.categories = [{ id: 1, name: '默认', icon: '📚', sort_order: 1, created_at: new Date().toISOString() }];
+        data.nextCategoryId = 2;
+      }
+    }
+
+    // ---- 迁移 learning_progress ----
+    if (migrateProg) {
+      const progCheck = oldDb.exec(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='learning_progress'"
+      );
+      if (progCheck && progCheck.length > 0) {
+        const oldProg = [];
+        const progStmt = oldDb.prepare('SELECT * FROM learning_progress');
+        while (progStmt.step()) oldProg.push(progStmt.getAsObject());
+        progStmt.free();
+
+        if (oldProg.length > 0) {
+          for (const p of oldProg) {
+            data.learningProgress.push({
+              courseId: Number(p.course_id),
+              lessonId: Number(p.lesson_id),
+              progress: Number(p.progress) || 0,
+              completed: p.completed ? 1 : 0,
+              lastPosition: Number(p.last_position) || 0,
+              updatedAt: p.updated_at || new Date().toISOString(),
+            });
+          }
+          console.log(`[course-db] 学习进度迁移完成：${oldProg.length} 条记录`);
+        }
+      }
+    }
   } catch (e) {
     console.error('[course-db] 迁移失败:', e.toString());
   } finally {
@@ -373,7 +433,7 @@ function toLessonRow(l) {
 // ============================================================
 
 function getAllCourses() {
-  return data.courses.map(toCourseRow);
+  return data.courses.map((c) => _mergeCategoryName(toCourseRow(c)));
 }
 
 function getCourseDetail(courseId) {
@@ -396,15 +456,24 @@ function getCourseDetail(courseId) {
     token: c.token,
     sourcePath: c.source_path,
     categoryId: c.category_id,
+    chapterCount: c.chapters.length,
+    lessonCount: c.chapters.reduce((s, ch) => s + ch.lessons.length, 0),
     chapters: c.chapters.map((ch) => ({
       id: ch.id,
       title: ch.title,
       sortOrder: ch.sort_order,
+      sections: Array.isArray(ch.sections) ? [...ch.sections] : [],
       lessons: ch.lessons.map(toLessonRow),
-      pdfs: ch.pdfs || [],
+      pdfs: (ch.pdfs || []).map(p => ({
+        id: p.id,
+        name: p.name || p.path || '',
+        url: p.url || p.path || '',
+        path: p.path || p.url || '',
+        sectionTitle: p.sectionTitle || '',
+      })),
     })),
   };
-  return result;
+  return _mergeCategoryName(result);
 }
 
 function searchCourses(keyword, categoryId, level) {
@@ -425,7 +494,7 @@ function searchCourses(keyword, categoryId, level) {
   if (level) {
     filtered = filtered.filter((c) => c.level === level);
   }
-  return filtered.map(toCourseRow);
+  return filtered.map((c) => _mergeCategoryName(toCourseRow(c)));
 }
 
 function getCourseStats() {
@@ -435,7 +504,13 @@ function getCourseStats() {
       totalLessons += ch.lessons.length;
     }
   }
-  return { totalCourses: data.courses.length, totalLessons };
+  const prog = getProgressStats();
+  return {
+    totalCourses: data.courses.length,
+    totalLessons,
+    completedCourses: prog.completedCourses,
+    completedLessons: prog.completedLessons,
+  };
 }
 
 function addCourse(courseData) {
@@ -476,8 +551,15 @@ function addCourse(courseData) {
           title: chData.title || '',
           sort_order: ci + 1,
           created_at: now,
+          sections: Array.isArray(chData.sections) ? [...chData.sections] : [],
           lessons: [],
-          pdfs: chData.pdfs || [],
+          pdfs: (chData.pdfs || []).map(p => ({
+            id: p.id || ('p_' + Date.now() + '_' + Math.floor(Math.random() * 1e6)),
+            name: p.name || p.path || '',
+            url: p.url || p.path || '',
+            path: p.path || p.url || '',
+            sectionTitle: p.sectionTitle || '',
+          })),
         };
         if (chData.lessons) {
           for (let li = 0; li < chData.lessons.length; li++) {
@@ -570,8 +652,15 @@ function updateCourse(courseData) {
           title: chData.title,
           sort_order: ci + 1,
           created_at: now,
+          sections: Array.isArray(chData.sections) ? [...chData.sections] : [],
           lessons: [],
-          pdfs: chData.pdfs || [],
+          pdfs: (chData.pdfs || []).map(p => ({
+            id: p.id || ('p_' + Date.now() + '_' + Math.floor(Math.random() * 1e6)),
+            name: p.name || p.path || '',
+            url: p.url || p.path || '',
+            path: p.path || p.url || '',
+            sectionTitle: p.sectionTitle || '',
+          })),
         };
         if (chData.lessons && Array.isArray(chData.lessons)) {
           for (let li = 0; li < chData.lessons.length; li++) {
@@ -659,7 +748,15 @@ function upsertCourseFromSource(input) {
             sort_order:
               ch.sortOrder && ch.sortOrder > 0 ? ch.sortOrder : ci + 1,
             created_at: now,
+            sections: Array.isArray(ch.sections) ? [...ch.sections] : [],
             lessons: [],
+            pdfs: (ch.pdfs || []).map(p => ({
+              id: p.id || ('p_' + Date.now() + '_' + Math.floor(Math.random() * 1e6)),
+              name: p.name || p.path || '',
+              url: p.url || p.path || '',
+              path: p.path || p.url || '',
+              sectionTitle: p.sectionTitle || '',
+            })),
           };
           const lessons = ch.lessons || [];
           for (let li = 0; li < lessons.length; li++) {
@@ -679,6 +776,7 @@ function upsertCourseFromSource(input) {
               attachments: l.attachments || null,
               doc_url: l.docUrl || '',
               path: l.path || '',
+              sectionTitle: l.sectionTitle || '',
               created_at: now,
             });
           }
@@ -724,8 +822,15 @@ function upsertCourseFromSource(input) {
           sort_order:
             ch.sortOrder && ch.sortOrder > 0 ? ch.sortOrder : ci + 1,
           created_at: now,
+          sections: Array.isArray(ch.sections) ? [...ch.sections] : [],
           lessons: [],
-          pdfs: ch.pdfs || [],
+          pdfs: (ch.pdfs || []).map(p => ({
+            id: p.id || ('p_' + Date.now() + '_' + Math.floor(Math.random() * 1e6)),
+            name: p.name || p.path || '',
+            url: p.url || p.path || '',
+            path: p.path || p.url || '',
+            sectionTitle: p.sectionTitle || '',
+          })),
         };
         const lessons = ch.lessons || [];
         for (let li = 0; li < lessons.length; li++) {
@@ -745,6 +850,7 @@ function upsertCourseFromSource(input) {
             attachments: l.attachments || null,
             doc_url: l.docUrl || '',
             path: l.path || '',
+            sectionTitle: l.sectionTitle || '',
             created_at: now,
           });
         }
@@ -911,6 +1017,146 @@ function updateCategoryForCourses(oldCategoryId, newCategoryId) {
   saveJson();
 }
 
+function _mergeCategoryName(course) {
+  const cat = data.categories.find((c) => c.id === Number(course.categoryId));
+  course.category = cat ? cat.name : '未分类';
+  return course;
+}
+
+// ============================================================
+//  Categories CRUD
+// ============================================================
+
+function getAllCategories() {
+  return data.categories
+    .slice()
+    .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      icon: c.icon,
+      sortOrder: c.sort_order,
+    }));
+}
+
+function _seedDefaultCategoriesIfEmpty() {
+  if (data.categories.length > 0) return;
+  const defaults = [
+    { name: '计算机基础课程', icon: '🗃️', sort_order: 1 },
+    { name: '软考课程', icon: '📘', sort_order: 2 },
+    { name: '行测课程', icon: '📝', sort_order: 3 },
+    { name: '申论课程', icon: '📜', sort_order: 4 },
+    { name: '面试课程', icon: '🎤', sort_order: 5 },
+    { name: '经济经融基础课程', icon: '📊', sort_order: 6 },
+    { name: '英语课程', icon: '🔤', sort_order: 7 },
+  ];
+  for (const c of defaults) {
+    data.categories.push({
+      id: data.nextCategoryId++,
+      name: c.name,
+      icon: c.icon,
+      sort_order: c.sort_order,
+      created_at: new Date().toISOString(),
+    });
+  }
+  saveJson();
+}
+
+function addCategory(name, icon) {
+  if (!name || !name.trim()) return { success: false, error: '分类名不能为空' };
+  const trimmed = name.trim();
+  if (data.categories.some((c) => c.name === trimmed)) {
+    return { success: false, error: '分类已存在' };
+  }
+  const maxSort = data.categories.reduce((m, c) => Math.max(m, c.sort_order || 0), 0);
+  const item = {
+    id: data.nextCategoryId++,
+    name: trimmed,
+    icon: icon || '',
+    sort_order: maxSort + 1,
+    created_at: new Date().toISOString(),
+  };
+  data.categories.push(item);
+  saveJson();
+  return { success: true, id: item.id };
+}
+
+function updateCategory(id, name, icon) {
+  if (!id) return { success: false, error: '缺少分类ID' };
+  if (!name || !name.trim()) return { success: false, error: '分类名不能为空' };
+  const trimmed = name.trim();
+  if (data.categories.some((c) => c.name === trimmed && c.id !== Number(id))) {
+    return { success: false, error: '已存在同名分类' };
+  }
+  const cat = data.categories.find((c) => c.id === Number(id));
+  if (!cat) return { success: false, error: '分类不存在' };
+  cat.name = trimmed;
+  if (icon !== undefined) cat.icon = icon;
+  saveJson();
+  return { success: true };
+}
+
+function deleteCategory(categoryId) {
+  if (!categoryId) return { success: false, error: '缺少分类ID' };
+  if (String(categoryId) === '1') {
+    return { success: false, error: '默认分类（未分类）不能删除' };
+  }
+  const idx = data.categories.findIndex((c) => c.id === Number(categoryId));
+  if (idx === -1) return { success: false, error: '分类不存在' };
+  updateCategoryForCourses(categoryId, 1);
+  data.categories.splice(idx, 1);
+  saveJson();
+  return { success: true };
+}
+
+// ============================================================
+//  Learning Progress CRUD
+// ============================================================
+
+function updateProgress(courseId, lessonId, progress, completed, lastPosition) {
+  const idx = data.learningProgress.findIndex(
+    (p) => p.courseId === Number(courseId) && p.lessonId === Number(lessonId)
+  );
+  const now = new Date().toISOString();
+  if (idx >= 0) {
+    const p = data.learningProgress[idx];
+    p.progress = Number(progress) || 0;
+    p.completed = completed ? 1 : 0;
+    p.lastPosition = Number(lastPosition) || 0;
+    p.updatedAt = now;
+  } else {
+    data.learningProgress.push({
+      courseId: Number(courseId),
+      lessonId: Number(lessonId),
+      progress: Number(progress) || 0,
+      completed: completed ? 1 : 0,
+      lastPosition: Number(lastPosition) || 0,
+      updatedAt: now,
+    });
+  }
+  saveJson();
+}
+
+function getCourseProgress(courseId) {
+  return data.learningProgress
+    .filter((p) => p.courseId === Number(courseId))
+    .map((p) => ({
+      lessonId: p.lessonId,
+      progress: p.progress,
+      completed: p.completed,
+      lastPosition: p.lastPosition,
+      updatedAt: p.updatedAt,
+    }));
+}
+
+function getProgressStats() {
+  const completedLessons = data.learningProgress.filter((p) => p.completed === 1).length;
+  const completedCourses = new Set(
+    data.learningProgress.filter((p) => p.completed === 1).map((p) => p.courseId)
+  ).size;
+  return { completedCourses, completedLessons };
+}
+
 // ============================================================
 //  导出
 // ============================================================
@@ -933,4 +1179,10 @@ module.exports = {
   updateLesson,
   updateCategoryForCourses,
   closeCourseDatabase,
+  getAllCategories,
+  addCategory,
+  updateCategory,
+  deleteCategory,
+  updateProgress,
+  getCourseProgress,
 };

@@ -2,7 +2,7 @@
   "name": "course-client",
   "version": "1.0.0",
   "description": "在线课程学习平台客户端",
-  "main": "main.js",
+  "main": "main/index.js",
   "author": "Course Team",
   "scripts": {
     "start": "electron .",
@@ -51,20 +51,14 @@
       "output": "dist"
     },
     "files": [
-      "main.js",
+      "main/**/*",
       "preload.js",
-      "database.js",
-      "course-db.js",
-      "sync-service.js",
-      "config.js",
-      "courses_data.json",
-      "cd2-course.js",
-      "clouddrive.proto",
-      "api_guide.html",
-      "api_guide.md",
+      "database/**/*",
+      "services/**/*",
       "packages/**/*",
       "src/**/*",
       "assets/**/*",
+      "clouddrive.proto",
       "!dist/**/*",
       "!*.log"
     ],
@@ -77,7 +71,7 @@
         ]
       },
       {
-        "from": "courses_data.json",
+        "from": "database/courses_data.json",
         "to": "courses_data.json"
       }
     ],
