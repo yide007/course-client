@@ -66,38 +66,6 @@ function register() {
     }
   });
 
-  ipcMain.handle('pick-cover-image', async () => {
-    try {
-      const res = await dialog.showOpenDialog(state.mainWindow, {
-        title: '选择课程封面图片',
-        properties: ['openFile'],
-        filters: [
-          { name: '图片文件', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] },
-        ],
-      });
-      if (!res || res.canceled || !res.filePaths || !res.filePaths[0]) {
-        return { success: false, canceled: true };
-      }
-      const srcFile = res.filePaths[0];
-      if (!fs.existsSync(srcFile)) return { success: false, error: '文件不存在' };
-
-      const projectImagesDir = path.join(__dirname, '..', '..', 'src', 'images');
-      const coversDir = path.join(projectImagesDir, 'covers');
-      if (!fs.existsSync(coversDir)) fs.mkdirSync(coversDir, { recursive: true });
-
-      const ext = (path.extname(srcFile) || '.jpg').toLowerCase();
-      const destName = `cover_${Date.now()}_${Math.floor(Math.random() * 10000)}${ext}`;
-      const destPath = path.join(coversDir, destName);
-
-      fs.copyFileSync(srcFile, destPath);
-
-      const fileUrl = 'file:///' + destPath.replace(/\\/g, '/').replace(/^\/+/, '');
-      return { success: true, fileUrl, localPath: destPath, coversDir };
-    } catch (e) {
-      return { success: false, error: e.message || String(e) };
-    }
-  });
-
   ipcMain.handle('pick-video-file', async () => {
     try {
       const res = await dialog.showOpenDialog(state.mainWindow, {
@@ -162,6 +130,69 @@ function register() {
       const srcFile = res.filePaths[0];
       if (!fs.existsSync(srcFile)) return { success: false, error: '文件不存在' };
       return { success: true, localPath: srcFile };
+    } catch (e) {
+      return { success: false, error: e.message || String(e) };
+    }
+  });
+
+  ipcMain.handle('pick-folder-videos', async () => {
+    try {
+      const res = await dialog.showOpenDialog(state.mainWindow, {
+        title: '选择视频文件夹',
+        properties: ['openDirectory'],
+      });
+      if (!res || res.canceled || !res.filePaths || !res.filePaths[0]) {
+        return { success: false, canceled: true };
+      }
+      const rootDir = res.filePaths[0];
+      if (!fs.existsSync(rootDir)) return { success: false, error: '文件夹不存在' };
+      const stat = fs.statSync(rootDir);
+      if (!stat.isDirectory()) return { success: false, error: '选择的不是文件夹' };
+
+      const VIDEO_EXTS = new Set(['mp4', 'mkv', 'avi', 'mov', 'flv', 'wmv', 'webm', 'm4v', '3gp', 'ts', 'rmvb']);
+      const rootName = path.basename(rootDir);
+      const files = [];
+      const subFoldersSet = new Set();
+
+      function walk(dir, depth) {
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+        catch (e) { return; }
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            if (depth === 1) subFoldersSet.add(entry.name);
+            walk(fullPath, depth + 1);
+          } else if (entry.isFile()) {
+            const ext = (path.extname(entry.name) || '').slice(1).toLowerCase();
+            if (!VIDEO_EXTS.has(ext)) continue;
+            try {
+              const fStat = fs.statSync(fullPath);
+              const rel = path.relative(rootDir, fullPath).split(path.sep).join('/');
+              const parts = rel.split('/');
+              const parentFolder = parts.length > 1 ? parts[0] : '';
+              files.push({
+                localPath: fullPath,
+                size: fStat.size,
+                name: entry.name,
+                relativePath: rel,
+                parentFolder,
+              });
+            } catch (_) {}
+          }
+        }
+      }
+
+      walk(rootDir, 1);
+      files.sort((a, b) => a.relativePath.localeCompare(b.relativePath, 'zh-CN', { numeric: true }));
+
+      return {
+        success: true,
+        folderName: rootName,
+        folderPath: rootDir,
+        files,
+        subFolders: Array.from(subFoldersSet).sort((a, b) => a.localeCompare(b, 'zh-CN')),
+      };
     } catch (e) {
       return { success: false, error: e.message || String(e) };
     }

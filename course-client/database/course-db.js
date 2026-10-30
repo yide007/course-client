@@ -377,6 +377,7 @@ function toCourseRow(c) {
   const chapterCount = c.chapters.length;
   let lessonCount = 0;
   for (const ch of c.chapters) lessonCount += ch.lessons.length;
+  const mode = c.course_mode || (_inferMode(c) === 'manual' ? 'manual' : 'token');
   return {
     id: c.id,
     title: c.title,
@@ -396,9 +397,24 @@ function toCourseRow(c) {
     sourceId: c.source_id,
     sourceKey: c.source_key,
     sourcePath: c.source_path,
+    sourceDirId: c.source_dir_id || null,
+    sourceCfgId: c.source_cfg_id || null,
+    courseMode: mode,
+    _manual: mode === 'manual',
     chapterCount,
     lessonCount,
   };
+}
+
+function _inferMode(c) {
+  // 网盘课程：来自 115 网盘导入，或保存了网盘目录/账号标识
+  const isNetdisk =
+    c.source_dir_id ||
+    c.source_cfg_id ||
+    (c.source_key && String(c.source_key).startsWith('p115::'));
+  if (isNetdisk) return 'netdisk';
+  const hasConn = Boolean((c.domain && String(c.domain).trim()) || (c.token && String(c.token).trim()));
+  return hasConn ? 'token' : 'manual';
 }
 
 function toChapterRow(ch) {
@@ -425,6 +441,7 @@ function toLessonRow(l) {
     docUrl: l.doc_url || '',
     path: l.path || '',
     sectionTitle: l.sectionTitle || '',
+    videoSource: l.video_source || null,
   };
 }
 
@@ -439,6 +456,7 @@ function getAllCourses() {
 function getCourseDetail(courseId) {
   const c = findCourse(courseId);
   if (!c) return null;
+  const mode = c.course_mode || (_inferMode(c) === 'manual' ? 'manual' : 'token');
   const result = {
     id: c.id,
     title: c.title,
@@ -455,7 +473,11 @@ function getCourseDetail(courseId) {
     port: c.port,
     token: c.token,
     sourcePath: c.source_path,
+    sourceDirId: c.source_dir_id || null,
+    sourceCfgId: c.source_cfg_id || null,
     categoryId: c.category_id,
+    courseMode: mode,
+    _manual: mode === 'manual',
     chapterCount: c.chapters.length,
     lessonCount: c.chapters.reduce((s, ch) => s + ch.lessons.length, 0),
     chapters: c.chapters.map((ch) => ({
@@ -517,6 +539,7 @@ function addCourse(courseData) {
   try {
     const id = data.nextId++;
     const now = new Date().toISOString();
+    const manualFlag = courseData._manual === true || courseData.courseMode === 'manual';
     const course = {
       id,
       category_id: courseData.categoryId || 1,
@@ -530,12 +553,13 @@ function addCourse(courseData) {
       students: Number(courseData.students) || 0,
       cover_color: courseData.coverColor || '',
       cover_image: courseData.coverImage || '',
-      domain: courseData.domain || 'yide2099.de5.net',
+      domain: courseData.domain || '',
       port: courseData.port || '',
       token: courseData.token || '',
       source_id: null,
       source_key: null,
       source_path: courseData.sourcePath || '/',
+      course_mode: manualFlag ? 'manual' : 'token',
       created_at: now,
       updated_at: now,
       chapters: [],
@@ -633,6 +657,16 @@ function updateCourse(courseData) {
     if (courseData.token !== undefined) c.token = courseData.token;
     if (courseData.sourcePath !== undefined)
       c.source_path = courseData.sourcePath;
+    if (courseData.sourceDirId !== undefined)
+      c.source_dir_id = courseData.sourceDirId || null;
+    if (courseData.sourceCfgId !== undefined)
+      c.source_cfg_id = courseData.sourceCfgId || null;
+    if (courseData._manual !== undefined)
+      c.course_mode = courseData._manual
+        ? 'manual'
+        : (courseData.courseMode === 'netdisk' ? 'netdisk' : 'token');
+    else if (courseData.courseMode !== undefined)
+      c.course_mode = courseData.courseMode;
     c.updated_at = new Date().toISOString();
 
     // 重写章节结构
@@ -680,6 +714,7 @@ function updateCourse(courseData) {
               doc_url: lData.docUrl || '',
               path: lData.path || '',
               sectionTitle: lData.sectionTitle || '',
+              video_source: lData.videoSource || lData.video_source || null,
               created_at: now,
             });
           }
@@ -700,6 +735,7 @@ function updateCourse(courseData) {
 // ============================================================
 
 function upsertCourseFromSource(input) {
+  console.log('[upsertCourseFromSource] called, input keys=' + (input ? Object.keys(input).join(',') : 'null') + ' sourceKey=' + (input && input.sourceKey) + ' chapters=' + ((input && input.chapters && input.chapters.length) || 0));
   if (!input || !input.sourceKey) throw new Error('sourceKey 不能为空');
 
   let categoryId = parseInt(input.categoryId);
@@ -726,11 +762,13 @@ function upsertCourseFromSource(input) {
       existing.students = Number(input.students) || 0;
       existing.cover_color = input.coverColor || '';
       existing.cover_image = input.coverImage || '';
-      existing.domain = input.domain || 'yide2099.de5.net';
-      existing.port = input.port || '';
-      existing.token = input.token || '';
+      existing.domain = input.isP115 ? '' : (input.domain || '');
+      existing.port = input.isP115 ? '' : (input.port || '');
+      existing.token = input.isP115 ? '' : (input.token || '');
       existing.source_id = input.sourceId || null;
       existing.source_path = input.sourcePath || '';
+      existing.source_dir_id = input.sourceDirId || null;
+      existing.course_mode = input.isP115 ? 'netdisk' : 'token';
       existing.updated_at = now;
 
       // 重写章节
@@ -777,6 +815,7 @@ function upsertCourseFromSource(input) {
               doc_url: l.docUrl || '',
               path: l.path || '',
               sectionTitle: l.sectionTitle || '',
+              video_source: l.video_source || null,
               created_at: now,
             });
           }
@@ -799,12 +838,15 @@ function upsertCourseFromSource(input) {
         students: Number(input.students) || 0,
         cover_color: input.coverColor || '',
         cover_image: input.coverImage || '',
-        domain: input.domain || 'yide2099.de5.net',
-        port: input.port || '',
-        token: input.token || '',
+        domain: input.isP115 ? '' : (input.domain || ''),
+        port: input.isP115 ? '' : (input.port || ''),
+        token: input.isP115 ? '' : (input.token || ''),
         source_id: input.sourceId || null,
         source_key: input.sourceKey,
         source_path: input.sourcePath || '',
+        source_dir_id: input.sourceDirId || null,
+        source_cfg_id: input.sourceCfgId || null,
+        course_mode: input.isP115 ? 'netdisk' : 'token',
         created_at: now,
         updated_at: now,
         chapters: [],
@@ -851,6 +893,7 @@ function upsertCourseFromSource(input) {
             doc_url: l.docUrl || '',
             path: l.path || '',
             sectionTitle: l.sectionTitle || '',
+            video_source: l.video_source || null,
             created_at: now,
           });
         }

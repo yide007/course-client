@@ -1,4 +1,4 @@
-﻿function _stopVideoPlayback() {
+function _stopVideoPlayback() {
   try {
     const dp = document.getElementById('detail-player');
     if (dp && dp.src && !dp.paused) { dp.pause(); }
@@ -35,8 +35,10 @@ function _saveCurrentProgress() {
   } catch (_) {}
 }
 
-function navigateTo(page) {
+function navigateTo(page, skipLoad = false) {
   _stopVideoPlayback();
+  if (window._p115Hls) { try { window._p115Hls.destroy(); } catch (_) {} window._p115Hls = null; }
+  if (typeof stopP115QrPoll === 'function') stopP115QrPoll();
   const navEl = document.querySelector('.nav-item[data-page="' + page + '"]');
   const pageEl = document.getElementById('page-' + page);
   const needsAdmin = (navEl && navEl.getAttribute('data-role') === 'admin') ||
@@ -49,6 +51,36 @@ function navigateTo(page) {
   document.querySelectorAll('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.page === page));
   document.querySelectorAll('.page').forEach((p) => p.classList.remove('active'));
   if (pageEl) pageEl.classList.add('active');
+
+  // 恢复所有页面的 page-header 显示（被隐藏的页面需要还原）
+  document.querySelectorAll('.page > .page-header').forEach((h) => { h.style.display = ''; });
+
+  // 侧边栏显隐：详情页与115网盘页全屏浏览（隐藏），其余页面显示
+  const sidebar = document.getElementById('sidebar');
+  if (page === 'detail' || page === 'p115') {
+    if (sidebar) sidebar.classList.add('hidden');
+  } else {
+    if (sidebar) sidebar.classList.remove('hidden');
+  }
+
+  // 进入需要显示标题的页面时，隐藏其 page-header 并在顶部工具栏渲染标题
+  // 注意：course-mgmt 页面有特殊的章节管理模式，page-header 处理由 loadCourseMgmt/openChapterMgmt 负责
+  const pagesWithTopbarTitle = ['courses', 'categories', 'users', 'upload-config', 'stats', 'p115'];
+  if (pagesWithTopbarTitle.includes(page)) {
+    if (pageEl) {
+      const header = pageEl.querySelector('.page-header');
+      if (header) header.style.display = 'none';
+    }
+  } else if (page === 'detail') {
+    // 详情页由 viewCourseDetail 处理
+  } else if (page === 'course-mgmt') {
+    // 课程管理页由 loadCourseMgmt/openChapterMgmt 处理
+  } else {
+    // 其他页面清空顶部工具栏
+    if (typeof _clearTopbarNav === 'function') _clearTopbarNav();
+  }
+
+  if (skipLoad) return;
 
   if (page === 'courses') {
     currentCategoryId = null;
@@ -63,14 +95,41 @@ function navigateTo(page) {
     loadUserMgmt();
   } else if (page === 'upload-config') {
     loadUploadConfigs();
+    loadP115Configs();
   } else if (page === 'stats') {
     loadStats();
+  } else if (page === 'p115') {
+    loadP115Drive();
   }
 }
 
 async function loadCourses() {
   const courses = await api.getCourses();
   const categories = await api.getCategories();
+
+  // 防止异步返回时用户已切换到其他页面
+  if (currentPage !== 'courses') return;
+
+  // 隐藏 page-header，标题和按钮移到顶部工具栏
+  const coursesPage = document.getElementById('page-courses');
+  if (coursesPage) {
+    const header = coursesPage.querySelector('.page-header');
+    if (header) header.style.display = 'none';
+  }
+  const isAdmin = _currentLoginUser && _currentLoginUser.role === 'admin';
+  const actionHtml = isAdmin
+    ? '<button type="button" class="btn btn-primary" id="topbar-add-course" style="padding:8px 16px;font-size:13px;">+ 添加课程</button>'
+    : '';
+  // 根据是否选中分类决定标题
+  let pageTitle = '全部课程';
+  if (currentCategoryId) {
+    const cat = (categories || []).find(c => String(c.id) === String(currentCategoryId));
+    if (cat) pageTitle = cat.name;
+  }
+  if (typeof _renderTopbarTitle === 'function') _renderTopbarTitle(pageTitle, actionHtml);
+  const addBtn = document.getElementById('topbar-add-course');
+  if (addBtn) addBtn.addEventListener('click', () => showCourseModal());
+
   renderCategoryList(categories || [], courses || []);
   filterAndRenderCourses(courses || []);
 }
@@ -101,6 +160,8 @@ function renderCategoryList(categories, courses) {
     el.addEventListener('click', () => {
       const catId = el.dataset.catId;
       currentCategoryId = catId || null;
+      const catNameEl = el.querySelector('.cat-name');
+      const catName = catNameEl ? catNameEl.textContent : '全部课程';
 
       // ===== 离开页面自动停止视频播放 =====
       _stopVideoPlayback();
@@ -110,6 +171,23 @@ function renderCategoryList(categories, courses) {
       document.querySelectorAll('.page').forEach((p) => p.classList.remove('active'));
       const coursesPage = document.getElementById('page-courses');
       if (coursesPage) coursesPage.classList.add('active');
+
+      // 恢复所有页面的 page-header，然后隐藏课程列表页的
+      document.querySelectorAll('.page > .page-header').forEach((h) => { h.style.display = ''; });
+      if (coursesPage) {
+        const coursesHeader = coursesPage.querySelector('.page-header');
+        if (coursesHeader) coursesHeader.style.display = 'none';
+      }
+      const isAdmin = _currentLoginUser && _currentLoginUser.role === 'admin';
+      const catActionHtml = isAdmin
+        ? '<button type="button" class="btn btn-primary" id="topbar-add-course" style="padding:8px 16px;font-size:13px;">+ 添加课程</button>'
+        : '';
+      if (typeof _renderTopbarTitle === 'function') _renderTopbarTitle(catName, catActionHtml);
+      const catAddBtn = document.getElementById('topbar-add-course');
+      if (catAddBtn) catAddBtn.addEventListener('click', () => showCourseModal());
+      // 显示侧边栏
+      const sidebar = document.getElementById('sidebar');
+      if (sidebar) sidebar.classList.remove('hidden');
 
       // ===== 2. 侧边栏高亮：分类子项 + 取消"全部课程"的 active =====
       document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
@@ -145,7 +223,7 @@ async function filterAndRenderCourses(courses) {
 function renderCourseList(courses) {
   const container = document.getElementById('course-list');
   if (!courses.length) {
-    container.innerHTML = '<p style="text-align:center;color:#94a3b8;padding:40px;">暂无课程，请先添加课程或同步课程源</p>';
+    container.innerHTML = '<p style="text-align:center;color:#94a3b8;padding:40px;">暂无课程，请先添加课程或从 115 网盘导入</p>';
     return;
   }
   container.innerHTML = courses.map((c) => {
@@ -187,7 +265,7 @@ async function _updateCourseCategory(courseId, categoryId) {
       categoryId,
       title: detail.title,
       subtitle: detail.subtitle || '',
-      domain: detail.domain || 'yide2099.de5.net',
+      domain: detail.domain || '',
       port: detail.port || '',
       token: detail.token || '',
       instructor: detail.instructor || '',
@@ -196,7 +274,7 @@ async function _updateCourseCategory(courseId, categoryId) {
       level: detail.level || '初级',
       rating: detail.rating || 4.5,
       description: detail.description || '',
-      // 必须传入 chapters 防止 updateCourse 删除章节数据
+      _manual: !!detail._manual,
       chapters: detail.chapters || [],
     });
     return (r && r.success);
@@ -206,3 +284,32 @@ async function _updateCourseCategory(courseId, categoryId) {
   }
 }
 
+async function _updateCourseMode(courseId, mode) {
+  try {
+    const detail = await api.getCourseDetail(courseId);
+    if (!detail) return false;
+    const isManual = mode === 'manual';
+    const r = await api.updateCourse({
+      courseId,
+      categoryId: detail.categoryId,
+      title: detail.title,
+      subtitle: detail.subtitle || '',
+      domain: detail.domain || '',
+      port: detail.port || '',
+      token: detail.token || '',
+      instructor: detail.instructor || '',
+      coverImage: detail.coverImage || '',
+      coverColor: detail.coverColor || '',
+      level: detail.level || '初级',
+      rating: detail.rating || 0,
+      description: detail.description || '',
+      _manual: isManual,
+      courseMode: mode,
+      chapters: detail.chapters || [],
+    });
+    return (r && r.success);
+  } catch (e) {
+    console.error('[update-mode]', e);
+    return false;
+  }
+}

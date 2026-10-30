@@ -1,4 +1,4 @@
-﻿﻿﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -10,6 +10,14 @@
   <!-- 登录页面 -->
   <div id="login-screen" class="login-screen">
     <div class="login-bg"></div>
+    <div class="login-window-controls">
+      <button class="window-btn" id="login-btn-minimize" title="最小化">
+        <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="5.5" width="8" height="1" rx="0.5" fill="currentColor"/></svg>
+      </button>
+      <button class="window-btn" id="login-btn-close" title="关闭">
+        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 3 L9 9 M9 3 L3 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
     <div class="login-box">
       <div class="login-logo">📚</div>
       <h1 class="login-title">在线课程学习平台</h1>
@@ -43,36 +51,25 @@
         <h1>📚 课程平台</h1>
       </div>
       <nav id="nav-menu">
-        <a class="nav-item active" data-page="courses">📖 全部课程</a>
+        <a class="nav-item" data-page="p115"><span class="nav-icon">☁️</span>115网盘</a>
+        <a class="nav-item active" data-page="courses"><span class="nav-icon">📖</span>全部课程</a>
         <div id="category-list" class="category-list"></div>
-        <a class="nav-item" data-page="course-mgmt" data-role="admin">📚 课程管理</a>
-        <a class="nav-item" data-page="categories" data-role="admin">📁 分类管理</a>
-        <a class="nav-item" data-page="users" data-role="admin">👥 用户/管理员管理</a>
-        <a class="nav-item" data-page="upload-config" data-role="admin">📤 上传配置</a>
-        <a class="nav-item" data-page="stats" data-role="admin">📊 学习统计</a>
+        <div class="sidebar-divider"></div>
+        <a class="nav-item" data-page="course-mgmt" data-role="admin"><span class="nav-icon">📚</span>课程管理</a>
+        <a class="nav-item" data-page="categories" data-role="admin"><span class="nav-icon">📁</span>分类管理</a>
+        <a class="nav-item" data-page="users" data-role="admin"><span class="nav-icon">👥</span>用户/管理员管理</a>
+        <a class="nav-item" data-page="upload-config" data-role="admin"><span class="nav-icon">⚙️</span>配置管理</a>
+        <a class="nav-item" data-page="stats" data-role="admin"><span class="nav-icon">📊</span>学习统计</a>
       </nav>
-      <div class="sidebar-toggle" data-role="admin">
-        <label class="toggle-label" for="local-sync-toggle">
-          <span class="toggle-text">📡 同步模式开关</span>
-          <div class="toggle-switch mode-toggle-switch">
-            <span class="toggle-mode-label toggle-mode-ip">IP</span>
-            <input type="checkbox" id="local-sync-toggle">
-            <span class="toggle-slider"></span>
-            <span class="toggle-mode-label toggle-mode-domain">域名</span>
-          </div>
-        </label>
-        <span class="toggle-hint" id="local-sync-hint">域名同步：使用云盘服务器地址播放</span>
-      </div>
       <div class="sidebar-footer">
         <div class="user-info" id="user-info">
           <div class="user-avatar" id="user-avatar">A</div>
           <div class="user-detail">
             <div class="user-name" id="user-name">管理员</div>
-            <div class="user-actions">
-              <a href="#" id="user-change-pwd" class="user-action-link">修改密码</a>
-              <span class="user-action-sep">·</span>
-              <a href="#" id="user-logout" class="user-action-link">退出登录</a>
-            </div>
+          </div>
+          <div class="user-actions">
+            <a href="#" id="user-change-pwd" class="user-action-link">改密</a>
+            <a href="#" id="user-logout" class="user-action-link">退出</a>
           </div>
         </div>
         <span id="app-version">v1.0.0</span>
@@ -80,6 +77,21 @@
     </aside>
 
     <main id="main-content">
+      <div class="topbar">
+        <div class="topbar-left" id="topbar-left"></div>
+        <div class="window-controls">
+          <button class="window-btn" id="btn-minimize" title="最小化">
+            <svg width="16" height="16" viewBox="0 0 12 12"><rect x="2" y="5.5" width="8" height="1" rx="0.5" fill="currentColor"/></svg>
+          </button>
+          <button class="window-btn" id="btn-maximize" title="最大化">
+            <svg width="16" height="16" viewBox="0 0 12 12" id="maximize-icon"><rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+          </button>
+          <button class="window-btn window-btn-close" id="btn-close" title="关闭">
+            <svg width="16" height="16" viewBox="0 0 12 12"><path d="M3 3 L9 9 M9 3 L3 9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+
       <!-- 课程列表页 -->
       <section id="page-courses" class="page active">
         <div class="page-header">
@@ -101,10 +113,100 @@
         <div id="course-list" class="course-grid"></div>
       </section>
 
+      <!-- 115 网盘页 -->
+      <section id="page-p115" class="page">
+        <div class="page-header">
+          <h2>115网盘</h2>
+          <div class="header-actions">
+            <select id="p115-config-select" style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;background:#fff;">
+              <option value="">选择 115 配置</option>
+            </select>
+            <button id="btn-p115-refresh" class="btn btn-secondary" style="padding:6px 14px;">刷新</button>
+          </div>
+        </div>
+        <div id="p115-user-info" style="margin-bottom:12px;"></div>
+        <div class="p115-layout" style="display:grid;grid-template-columns:1fr 1.7fr;grid-template-rows:minmax(0,1fr);gap:18px;align-items:stretch;min-height:0;flex:1;">
+          <div class="p115-left" style="display:flex;flex-direction:column;gap:12px;min-height:0;">
+            <div class="detail-card" style="padding:14px;display:flex;flex-direction:column;min-height:0;flex:1;">
+              <div style="display:flex;align-items:center;gap:8px;padding:4px 0;flex-wrap:wrap;">
+                <button id="btn-p115-newfolder" class="btn btn-secondary" style="padding:6px 14px;font-size:13px;">📁 新建文件夹</button>
+                <button id="btn-p115-upload" class="btn btn-secondary" style="padding:6px 14px;font-size:13px;">⬆ 上传文件</button>
+                <select id="p115-view-select" title="查看方式" style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;background:#fff;cursor:pointer;margin-left:4px;">
+                  <option value="grid">▦ 小图标</option>
+                  <option value="list">☰ 列表</option>
+                </select>
+                <span id="p115-upload-progress" style="font-size:12px;color:#6366f1;"></span>
+                <input id="p115-file-input" type="file" multiple style="display:none;">
+              </div>
+              <div class="p115-breadcrumb" id="p115-breadcrumb" style="display:flex;align-items:center;gap:6px;padding:8px 0;flex-wrap:wrap;"></div>
+              <div id="p115-file-list" style="flex:1;min-height:300px;overflow:auto;">
+                <p style="text-align:center;color:#94a3b8;padding:60px;">请先添加 115 配置并扫码登录</p>
+              </div>
+            </div>
+          </div>
+          <div class="p115-right" style="display:flex;flex-direction:column;min-height:0;">
+            <div class="detail-card" style="padding:14px;display:flex;flex-direction:column;min-height:0;flex:1;">
+              <div class="detail-player-header">
+                <h3 class="detail-card-title-video" id="p115-player-title">视频播放</h3>
+                <div id="p115-player-subtitle" class="detail-player-subtitle"></div>
+              </div>
+              <div id="p115-player-area" class="detail-player-area" style="position:relative;min-height:300px;">
+                <div id="p115-player-placeholder" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;border-radius:12px;overflow:hidden;">
+                  <svg width="100%" height="100%" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                      <linearGradient id="p115bg" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#0f172a;stop-opacity:1" />
+                        <stop offset="40%" style="stop-color:#1e1b4b;stop-opacity:1" />
+                        <stop offset="75%" style="stop-color:#4c1d95;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#5b21b6;stop-opacity:1" />
+                      </linearGradient>
+                      <radialGradient id="p115glow" cx="50%" cy="50%" r="50%">
+                        <stop offset="0%" style="stop-color:#a78bfa;stop-opacity:0.35" />
+                        <stop offset="60%" style="stop-color:#6366f1;stop-opacity:0.1" />
+                        <stop offset="100%" style="stop-color:#0f172a;stop-opacity:0" />
+                      </radialGradient>
+                      <filter id="p115blur"><feGaussianBlur stdDeviation="18"/></filter>
+                    </defs>
+                    <rect width="1600" height="900" fill="url(#p115bg)"/>
+                    <rect width="1600" height="900" fill="url(#p115glow)"/>
+                    <g filter="url(#p115blur)" opacity="0.6">
+                      <circle cx="280" cy="200" r="120" fill="#8b5cf6"/>
+                      <circle cx="1320" cy="700" r="160" fill="#6366f1"/>
+                      <circle cx="1400" cy="180" r="80" fill="#a78bfa"/>
+                      <circle cx="200" cy="750" r="100" fill="#4f46e5"/>
+                    </g>
+                    <circle cx="800" cy="450" r="90" fill="rgba(255,255,255,0.12)" stroke="rgba(255,255,255,0.35)" stroke-width="2"/>
+                    <polygon points="765,405 765,495 855,450" fill="white" opacity="0.95"/>
+                    <text x="800" y="640" text-anchor="middle" font-family="-apple-system,'Segoe UI',Roboto,sans-serif" font-size="34" font-weight="600" fill="rgba(255,255,255,0.75)" letter-spacing="4">点击左侧视频文件开始播放</text>
+                  </svg>
+                </div>
+                <video id="p115-player" controls preload="metadata" playsinline webkit-playsinline x5-playsinline style="display:none;"></video>
+              </div>
+              <div class="video-progress-bar" style="margin-top:6px;" id="p115-progress-bar">
+                <input type="range" id="p115-progress-slider" min="0" max="100" value="0" step="0.1">
+                <span id="p115-progress-text">0%</span>
+              </div>
+              <div class="player-nav-buttons" style="margin-top:10px;">
+                <button type="button" class="btn btn-secondary" id="p115-btn-prev">⬅ 上一集</button>
+                <button type="button" class="btn btn-secondary" id="p115-btn-next">下一集 ➡</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- 课程详情页 -->
       <section id="page-detail" class="page">
         <div class="page-header">
-          <h2 id="detail-title"></h2>
+          <div class="page-header-left">
+            <button type="button" class="icon-btn" id="btn-detail-back" title="返回">
+              <span class="icon-btn-icon">⬅</span>
+            </button>
+            <button type="button" class="icon-btn" id="btn-detail-home" title="主页">
+              <span class="icon-btn-icon">🏠</span>
+            </button>
+            <h2 id="detail-title"></h2>
+          </div>
         </div>
         <div id="detail-layout" class="detail-layout">
           <div class="detail-left">
@@ -128,16 +230,16 @@
                     </div>
                   </div>
                 </div>
-                <video id="detail-player" preload="metadata" playsinline webkit-playsinline x5-playsinline style="width:100%;"></video>
+                <video id="detail-player" controls preload="metadata" playsinline webkit-playsinline x5-playsinline style="width:100%;"></video>
               </div>
               <div class="video-progress-bar" style="margin-top:6px;">
                 <input type="range" id="detail-progress-slider" min="0" max="100" value="0" step="0.1">
                 <span id="detail-progress-text">0%</span>
               </div>
-            </div>
-            <div class="detail-card">
-              <h3>课程简介</h3>
-              <div id="detail-description" class="detail-description"></div>
+              <div class="player-nav-buttons" style="margin-top:10px;">
+                <button type="button" class="btn btn-secondary" id="btn-prev-lesson">⬅ 上一集</button>
+                <button type="button" class="btn btn-secondary" id="btn-next-lesson">下一集 ➡</button>
+              </div>
             </div>
           </div>
         </div>
@@ -188,16 +290,28 @@
         </div>
       </section>
 
-      <!-- 上传配置页 -->
+      <!-- 配置管理页 -->
       <section id="page-upload-config" class="page" data-role="admin">
         <div class="page-header">
-          <h2>上传配置</h2>
+          <h2>配置管理</h2>
           <div class="header-actions">
             <button id="btn-add-upload-config" class="btn btn-primary">+ 添加配置</button>
           </div>
         </div>
-        <div id="upload-config-list">
-          <p style="text-align:center;color:#94a3b8;padding:40px;">暂无上传配置，点击右上角添加</p>
+        <div class="config-section">
+          <div class="config-section-title">上传配置</div>
+          <div id="upload-config-list">
+            <p style="text-align:center;color:#94a3b8;padding:40px;">暂无配置，点击右上角添加</p>
+          </div>
+        </div>
+        <div class="config-section">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div class="config-section-title" style="margin-bottom:0;">115配置</div>
+            <button id="btn-add-p115-config" class="btn btn-primary" style="padding:6px 14px;font-size:12px;">+ 添加 115 配置</button>
+          </div>
+          <div id="p115-config-list">
+            <p style="text-align:center;color:#94a3b8;padding:40px;">暂无配置，点击右上角添加</p>
+          </div>
         </div>
       </section>
     </main>
@@ -223,13 +337,24 @@
     </div>
   </div>
 
-  <!-- 拆分模块加载顺序（依赖链：player → auth → list → detail → source → mgmt → entry） -->
-  <script src="js/player.js"></script>
+  <script defer src="js/hls.min.js"></script>
+  <script defer src="js/mpegts.min.js"></script>
+  <script src="js/app.js"></script>
+  <script defer src="js/player.js"></script>
+  <script defer src="js/p115-play.js"></script>
   <script src="js/auth.js"></script>
   <script src="js/course-list.js"></script>
-  <script src="js/course-detail.js"></script>
-  <script src="js/source-mgmt.js"></script>
-  <script src="js/course-mgmt.js"></script>
-  <script src="js/app.js"></script>
+  <script defer src="js/course-detail.js"></script>
+  <script defer src="js/source-mgmt.js"></script>
+  <script defer src="js/course-modal.js"></script>
+  <!-- 章节管理（拆分模块，defer 使下载与 HTML 解析并行，执行仍按声明顺序） -->
+  <script defer src="js/chapter-mgmt/state.js"></script>
+  <script defer src="js/chapter-mgmt/template.js"></script>
+  <script defer src="js/chapter-mgmt/upload.js"></script>
+  <script defer src="js/chapter-mgmt/modal.js"></script>
+  <script defer src="js/chapter-mgmt/events.js"></script>
+  <script defer src="js/chapter-mgmt/render.js"></script>
+  <script defer src="js/chapter-mgmt/index.js"></script>
+  <script defer src="js/course-mgmt.js"></script>
 </body>
 </html>

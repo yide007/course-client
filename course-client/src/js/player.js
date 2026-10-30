@@ -1,58 +1,7 @@
-﻿const api = window.electronAPI;
+const api = window.electronAPI;
 
 
-// ===== 🔬 播放卡死诊断日志工具 =====
-// 统一前缀 [PlayDiag] 方便 F12 过滤；t=相对 playVideo 调用时刻的毫秒数
-function _diag(player, tag, extra) {
-  try {
-    const t0 = player._diagT0 || 0;
-    const t = t0 ? (performance.now() - t0).toFixed(0) : '?';
-    const rs = player.readyState;
-    const ns = player.networkState;
-    const buf = player.buffered && player.buffered.length ?
-      ('[' + player.buffered.start(player.buffered.length - 1).toFixed(1) + '~' +
-       player.buffered.end(player.buffered.length - 1).toFixed(1) + ']') : '[]';
-    const info = `[PlayDiag t=${t}ms] ${tag} | rs=${rs} ns=${ns} cur=${(player.currentTime||0).toFixed(1)}s dur=${(player.duration||0).toFixed(1)}s buf=${buf}`;
-    if (extra !== undefined) console.log(info, extra);
-    else console.log(info);
-  } catch (e) { console.log('[PlayDiag] ' + tag, e); }
-}
-function _installPlayDiag(player, originDirectUrl) {
-  if (!player || player._diagInstalled) return;
-  player._diagInstalled = true;
-  player._diagT0 = performance.now();
-  player._diagWaitingSince = 0;
-  player._diagStalledCount = 0;
-  const EVTS = ['loadstart','progress','suspend','abort','error','emptied',
-    'stalled','play','pause','loadedmetadata','loadeddata','canplay',
-    'canplaythrough','playing','waiting','seeking','seeked','timeupdate',
-    'ended','durationchange','ratechange','volumechange'];
-  EVTS.forEach(ev => {
-    player.addEventListener(ev, () => {
-      if (ev === 'waiting') player._diagWaitingSince = performance.now();
-      if (ev === 'playing' && player._diagWaitingSince) {
-        const gap = performance.now() - player._diagWaitingSince;
-        _diag(player, `waiting→playing 缓冲恢复 gap=${gap.toFixed(0)}ms`);
-        player._diagWaitingSince = 0;
-      }
-      if (ev === 'stalled') {
-        player._diagStalledCount++;
-        _diag(player, `⚠️ stalled #${player._diagStalledCount} — Chromium 检测到网络停滞超过 3s`);
-      }
-      if (ev === 'seeking') {
-        player._diagSeekingSince = performance.now();
-        _diag(player, `▶️ seeking 开始 target=${player._seekQueuedTime?.toFixed(2) || 'cur'}s`);
-      }
-      if (ev === 'seeked' && player._diagSeekingSince) {
-        const gap = performance.now() - player._diagSeekingSince;
-        _diag(player, `✅ seeked 完成 gap=${gap.toFixed(0)}ms 新time=${player.currentTime.toFixed(2)}s`);
-        player._diagSeekingSince = 0;
-      }
-      _diag(player, `📡 ${ev}`);
-    });
-  });
-  _diag(player, `🔍 诊断已安装 | 直链=${originDirectUrl} | player.src(即将)=${player.src || '(待设置)'}`);
-}
+
 
 // ===== 本地媒体代理（兜底用，不再强制所有视频走代理）=====
 let MEDIA_PROXY_PORT = 0;
@@ -103,6 +52,7 @@ function _installDirectFallback(player, originalUrl, tokenRefObj) {
   } catch (_) {}
   // 已经是代理地址了，不重复包
   if (/^http:\/\/127\.0\.0\.1:/i.test(String(player.src || ''))) return;
+  if (/^http:\/\/127\.0\.0\.1:/i.test(originalUrl)) return;
   if (!/^https?:\/\//i.test(originalUrl)) return;
   const handler = () => {
     try {
@@ -233,7 +183,31 @@ function _installVideoClickControls() {
 }
 function _resetVideoForNext(player) {
   if (!player) return;
+  // mpegts 已预先就绪（外部 tryMpegts 成功 → _p115MpegtsReady=true），保留实例不动 src/load
+  if (player._p115Mpegts && player._p115MpegtsReady) {
+    delete player._p115MpegtsReady;
+    try { player.pause(); } catch (_) {}
+    try { if (player._progSaveInterval) { clearInterval(player._progSaveInterval); } } catch (_) {}
+    var prev = Number(player._playToken) || 0;
+    player._playToken = prev + 1;
+    try { if (player._rafTimer) { cancelAnimationFrame(player._rafTimer); } } catch (_) {}
+    player._rafTimer = 0;
+    player._rafDirty = false;
+    player._rafLastTime = 0;
+    _detachAllVideoEvents(player);
+    return;
+  }
   try { player.pause(); } catch (_) {}
+  // 若之前是 HLS 分片播放，先销毁 Hls 实例，避免它继续 attach 旧 media
+  if (player && player._hls) { try { player._hls.destroy(); } catch (_) {} player._hls = null; }
+  // 若之前是 mpegts 软解，先销毁 mpegts 实例
+  if (player._p115Mpegts) {
+    try { player._p115Mpegts.unload(); } catch (_) {}
+    try { player._p115Mpegts.detachMediaElement(); } catch (_) {}
+    try { player._p115Mpegts.destroy(); } catch (_) {}
+    player._p115Mpegts = null;
+    delete player._p115MpegtsReady;
+  }
   // 清理旧的进度保存定时器（详情页 3s 定时写 DB）
   try { if (player._progSaveInterval) { clearInterval(player._progSaveInterval); } } catch (_) {}
   try {
@@ -269,6 +243,86 @@ function _sweepVideoMemory() {
   // 提示 GC 回收（Electron 支持 --js-flags='--expose-gc'，不支持也不会报错）
   try { if (typeof window.gc === 'function') window.gc(); } catch (_) {}
 }
+
+// ===== 统一视频源加载：m3u8（115 网盘等分片流）走 Hls.js + 本地代理，其余走原生播放 =====
+// 非 m3u8 时调用 fallbackDirect() 走原有 player.src 逻辑；m3u8 时内部主动 attach Hls。
+function _playViaSource(player, url, originDirect, tokenRef, fallbackDirect) {
+  if (!player) return;
+  // mpegts 已预先接管播放 → 跳过 player.src 赋值（mpegts 自行维护 MediaSource），直接播放
+  if (player._p115Mpegts) {
+    console.log('[115] mpegts 已接管，跳过 player.src');
+    setTimeout(function () { var p = player.play(); if (p && typeof p.catch === 'function') p.catch(function () {}); }, 50);
+    return;
+  }
+  var isHls = url && (/\.m3u8/i.test(url) || /videoplay\.115\.com\/m3u8/i.test(url)) && typeof window.Hls === 'function' && Hls.isSupported();
+  if (!isHls) { if (fallbackDirect) fallbackDirect(); return; }
+
+  // 已进入 HLS 分片播放：不装原生直连 fallback（错误由 HLS 事件处理），不直接赋 src
+  if (player._hls) { try { player._hls.destroy(); } catch (_) {} player._hls = null; }
+  delete player._didFallbackProxy;
+  let loadUrl = url;
+  let recoveryCount = 0;
+
+  function build() {
+    const hls = new Hls({
+      enableWorker: true,
+      lowLatencyMode: false,
+      maxBufferLength: 30,
+      maxMaxBufferLength: 60,
+      manifestLoadingMaxRetry: 6,
+      levelLoadingMaxRetry: 6,
+      fragLoadingMaxRetry: 10,
+      fragLoadingMaxRetryTimeout: 15000,
+      liveSyncDurationCount: 3,
+    });
+    player._hls = hls;
+    hls.loadSource(loadUrl);
+    hls.attachMedia(player);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      try {
+        const tok = tokenRef ? tokenRef.current : player._playToken;
+        if ((player._playToken || 0) === (tok || 0)) player.play().catch(() => {});
+      } catch (_) {}
+    });
+    hls.on(Hls.Events.ERROR, (_e, data) => {
+      if (!data.fatal) return;
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR || data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        if (recoveryCount >= 2) {
+          console.error('[HLS] 多次恢复仍失败:', data.type, data.details);
+          try { player._hls = null; } catch (_) {}
+          return;
+        }
+        recoveryCount++;
+        const isAppend = /append|buffer/i.test(data.details || '');
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && isAppend) {
+          console.log('[HLS] bufferAppendError，销毁重建实例 try#' + recoveryCount);
+          try { hls.destroy(); } catch (_) {}
+          setTimeout(() => { try { build(); } catch (_) {} }, 600);
+          return;
+        }
+        console.log('[HLS] 尝试 recover try#' + recoveryCount);
+        hls.recoverMediaError();
+        setTimeout(() => {
+          try { hls.startLoad(); player.play().catch(() => {}); } catch (_) {}
+        }, 500);
+        return;
+      }
+      console.error('[HLS] 致命错误（不可恢复）:', data.type, data.details);
+    });
+    return hls;
+  }
+
+  // 本地代理端口的读取是异步的，拿到后才真正开始加载
+  try {
+    api.getMediaProxyPort().then((p) => {
+      const port = Number(p && p.port) || 0;
+      if (port) loadUrl = 'http://127.0.0.1:' + port + '/hls?src=' + encodeURIComponent(url);
+      console.log('[HLS] 源地址=' + url.slice(0, 100) + ' → 代理=' + loadUrl.slice(0, 100));
+      build();
+    });
+  } catch (_) { build(); }
+}
+
 // ===== 进度条安全 seek 工具：带 token 校验 + 等待元数据就绪 + 防抖 =====
 function _bindProgressSlider(player, slider, textEl, tokenRefObj) {
   if (!slider || !player) return;

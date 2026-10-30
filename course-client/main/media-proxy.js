@@ -10,6 +10,23 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 
+// 播放域上游请求头：115 的 videoplay.115.com 会校验收听端指纹，
+// 必须使用与浏览器一致的 UA / Accept / Origin / Referer，否则会拒绝分片请求。
+const _mediaUpstreamHeaders = (refererUrl) => {
+  const h = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+    'Accept': '*/*',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Origin': 'https://proapi.115.com',
+    'Connection': 'keep-alive',
+    'sec-ch-ua': '"Not=A?Brand";v="99", "Google Chrome";v="151", "Chromium";v="151"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+  };
+  if (refererUrl) h['Referer'] = refererUrl;
+  return h;
+};
+
 let mediaProxyPort = 0;
 // urlHash -> { url, contentLength, windowStart, windowBytes, busy, task }
 const _mediaProxyCache = new Map();
@@ -38,6 +55,48 @@ function _memEntry(url) {
 }
 const MAX_WINDOW_BYTES = 32 * 1024 * 1024;
 
+// 发起 HTTP(S) GET，自动跟随 30x 重定向（最多 6 跳），
+// 返回最终响应的 { statusCode, headers, stream, finalUrl }
+function _followGet(initialUrl, opts) {
+  opts = opts || {};
+  const maxRedirects = opts.maxRedirects || 6;
+  return new Promise((resolve, reject) => {
+    let url = initialUrl;
+    let redirects = 0;
+    function attempt() {
+      let u;
+      try { u = new URL(url); } catch (e) { return reject(e); }
+      const mod = u.protocol === 'https:' ? https : http;
+      const req = mod.request({
+        method: opts.method || 'GET',
+        hostname: u.hostname,
+        port: u.port || (u.protocol === 'https:' ? 443 : 80),
+        path: u.pathname + u.search,
+        headers: opts.headers || _mediaUpstreamHeaders('https://proapi.115.com/'),
+        timeout: opts.timeout || 15000,
+      }, (res) => {
+        const code = res.statusCode || 0;
+        if (code >= 301 && code <= 308 && res.headers['location']) {
+          try { res.resume(); } catch (_) {}
+          if (redirects >= maxRedirects) {
+            return reject(new Error('too many redirects'));
+          }
+          redirects++;
+          url = /^https?:\/\//i.test(res.headers['location'])
+            ? res.headers['location']
+            : (new URL(res.headers['location'], u)).href;
+          return attempt();
+        }
+        resolve({ statusCode: code, headers: res.headers, stream: res, finalUrl: url });
+      });
+      req.on('error', (e) => reject(e));
+      req.on('timeout', () => { try { req.destroy(new Error('timeout')); } catch (_) { reject(new Error('timeout')); } });
+      req.end();
+    }
+    attempt();
+  });
+}
+
 function _guessContentType(url) {
   try {
     const p = new URL(url).pathname.toLowerCase();
@@ -65,21 +124,24 @@ function _ensureContentLengthUpstream(url) {
     try {
       const u = new URL(url);
       const mod = u.protocol === 'https:' ? https : http;
+      // 115 CDN 校验浏览器指纹 + Range，需用 GET+Range=0-0 探测，否则 HEAD 403
+      const cHeaders = _mediaUpstreamHeaders('https://proapi.115.com/');
+      cHeaders['Range'] = 'bytes=0-0';
       const req = mod.request({
-        method: 'HEAD',
+        method: 'GET',
         hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80),
         path: u.pathname + u.search,
-        headers: { 'User-Agent': 'CourseClient/1.0' },
+        headers: cHeaders,
         timeout: 15000,
       }, (res) => {
         try {
-          if (res.headers['content-length'] && Number(res.headers['content-length']) > 0) {
-            resolve(Number(res.headers['content-length']));
-            return;
-          }
           const cr = res.headers['content-range'] || '';
           const m = cr.match(/\/(\d+)$/);
-          if (m) { resolve(Number(m[1])); return; }
+          if (m && Number(m[1]) > 0) { resolve(Number(m[1])); return; }
+          if (res.statusCode === 206 || res.statusCode === 200) {
+            const totalFromLen = res.headers['content-length'];
+            if (totalFromLen && Number(totalFromLen) > 0) { resolve(Number(totalFromLen)); return; }
+          }
           resolve(0);
         } finally { try { res.destroy(); } catch (_) {} }
       });
@@ -147,14 +209,14 @@ function _downloadRange(entry, needStart, needBytes, seq) {
 
   const u = new URL(entry.url);
   const mod = u.protocol === 'https:' ? https : http;
+  // 115 CDN 校验浏览器指纹（UA/Origin/Referer），必须用完整头，否则 403 防盗链
+  const gHeaders = _mediaUpstreamHeaders('https://proapi.115.com/');
+  gHeaders['Range'] = 'bytes=' + rangeStart + '-' + rangeEnd;
   const req = mod.request({
     method: 'GET',
     hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80),
     path: u.pathname + u.search,
-    headers: {
-      'User-Agent': 'CourseClient/1.0',
-      'Range': 'bytes=' + rangeStart + '-' + rangeEnd,
-    },
+    headers: gHeaders,
     timeout: 120000,
   }, (res) => {
     if (res.statusCode !== 206 && res.statusCode !== 200) {
@@ -180,6 +242,100 @@ function _downloadRange(entry, needStart, needBytes, seq) {
   return promise;
 }
 
+async function _serveDirect(req, res, src) {
+  const entry = _memEntry(src);
+  // 首次请求启动后台下载，数据存入 entry._directBuf，后续所有请求都从该 buffer 取。
+  if (!entry._directTask || !entry._directTask.active) {
+    const hdrs = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+      'Accept': '*/*',
+      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      'Connection': 'keep-alive',
+    };
+    const t = entry._directTask = { active: true, buf: Buffer.alloc(0), finished: false, contentLength: 0, waiters: [], totalChunk: 0 };
+    console.log('[media-proxy /direct] 开始下载: ' + src.slice(0, 100));
+    _followGet(src, { method: 'GET', timeout: 600000, headers: hdrs }).then((up) => {
+      const uh = up.headers || {};
+      t.contentLength = parseInt(uh['content-length'] || '0', 10) || 0;
+      console.log('[media-proxy /direct] 上游状态码=' + up.statusCode + ' contentLength=' + t.contentLength + ' contentType=' + (uh['content-type'] || '(none)'));
+      up.stream.on('data', (c) => {
+        t.buf = Buffer.concat([t.buf, c]);
+        t.totalChunk++;
+        const ws = t.waiters; t.waiters = [];
+        for (let i = 0; i < ws.length; i++) { try { ws[i](); } catch (_) {} }
+      });
+      up.stream.on('end', () => {
+        t.finished = true; t.active = false;
+        console.log('[media-proxy /direct] 下载完成: 实际=' + t.buf.length + ' 预期=' + t.contentLength + ' chunks=' + t.totalChunk);
+        const ws = t.waiters; t.waiters = [];
+        for (let i = 0; i < ws.length; i++) { try { ws[i](); } catch (_) {} }
+      });
+      up.stream.on('error', (e) => {
+        console.error('[media-proxy /direct] 上游流错误:', e && e.message);
+        t.active = false;
+        const ws = t.waiters; t.waiters = [];
+        for (let i = 0; i < ws.length; i++) { try { ws[i](); } catch (_) {} }
+      });
+    }).catch((e) => {
+      console.error('[media-proxy /direct] _followGet 异常:', e && e.message);
+      const t2 = entry._directTask; if (t2) { t2.active = false; const ws = t2.waiters; t2.waiters = []; for (let i = 0; i < ws.length; i++) { try { ws[i](); } catch (_) {} } }
+    });
+  }
+  const t = entry._directTask;
+  let start = 0, end = Infinity, isRange = false;
+  const rm = /bytes=(\d+)-(\d*)/.exec(req.headers['range'] || '');
+  if (rm) { isRange = true; start = Number(rm[1]) || 0; if (rm[2]) end = Number(rm[2]); }
+  const total = t.contentLength || 0;
+
+  // 等待下载完成（Chromium 解封装需要完整 mp4 头，流式推送容易失败）
+  const t0 = Date.now();
+  await new Promise((resolve) => {
+    const check = () => {
+      if (t.finished || !t.active) return resolve();
+      if (Date.now() - t0 > 600000) return resolve();
+      t.waiters.push(() => {
+        if (t.finished || !t.active) resolve();
+      });
+    };
+    check();
+  });
+
+  if (!t.finished || t.buf.length === 0) {
+    if (!res.headersSent) res.writeHead(502, { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'text/plain' });
+    return res.end('direct: download incomplete (active=' + t.active + ' finished=' + t.finished + ')');
+  }
+
+  const buf = t.buf;
+  console.log('[media-proxy /direct] 响应: range=' + (isRange ? start + '-' + (isFinite(end) ? end : '*') : '(全量)') + ' bufLen=' + buf.length + ' total=' + total);
+
+  if (!isRange) {
+    const headers = {
+      'Access-Control-Allow-Origin': '*',
+      'Content-Type': 'video/mp4',
+      'Accept-Ranges': 'bytes',
+      'Content-Length': String(buf.length),
+    };
+    if (!res.headersSent) res.writeHead(200, headers);
+    return res.end(buf);
+  }
+
+  const pieceEnd = Math.min(isFinite(end) ? end : buf.length - 1, buf.length - 1);
+  if (pieceEnd < start) {
+    if (!res.headersSent) res.writeHead(416, { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'text/plain' });
+    return res.end('direct: range not satisfiable');
+  }
+  const slice = buf.slice(start, pieceEnd + 1);
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Content-Type': 'video/mp4',
+    'Content-Range': 'bytes ' + start + '-' + pieceEnd + '/' + (total || buf.length),
+    'Accept-Ranges': 'bytes',
+    'Content-Length': String(slice.length),
+  };
+  if (!res.headersSent) res.writeHead(206, headers);
+  res.end(slice);
+}
+
 function startMediaProxy() {
   return new Promise((resolve) => {
     let _globalReqSeq = 0;
@@ -200,7 +356,203 @@ function startMediaProxy() {
           res.writeHead(200, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' });
           return res.end('ok');
         }
-        let src = decodeURIComponent(u.searchParams.get('src') || '');
+        if (u.pathname === '/direct') {
+          const src = u.searchParams.get('src') || '';
+          if (!src) { res.writeHead(400, { 'Access-Control-Allow-Origin': '*' }); return res.end('missing src'); }
+          // 顺序下载 + 本地内存窗口：seek/Range 由本地窗口切片返回，避免 115 对“跳到中间段”的请求变慢/断流导致黑屏
+          _serveDirect(req, res, src);
+          return;
+        }
+        if (u.pathname === '/hls') {
+          const origSrc = u.searchParams.get('src') || '';
+          if (!origSrc) { res.writeHead(400); return res.end('missing src'); }
+          _followGet(origSrc, { timeout: 15000 }).then((hlsRes) => {
+            if (!hlsRes || hlsRes.statusCode !== 200) {
+              console.log('[115代理] /hls 上游非200:', hlsRes && hlsRes.statusCode, 'src=', origSrc.slice(0, 120));
+              res.writeHead(502, { 'Access-Control-Allow-Origin': '*' });
+              return res.end('upstream ' + (hlsRes && hlsRes.statusCode));
+            }
+            const chunks = [];
+            hlsRes.stream.on('data', c => chunks.push(c));
+            hlsRes.stream.on('end', () => {
+              let raw;
+              try { raw = Buffer.concat(chunks).toString('utf8'); } catch (e) {
+                console.error('[115代理] /hls 解码失败:', e.message);
+                res.writeHead(502, { 'Access-Control-Allow-Origin': '*' });
+                return res.end('decode error');
+              }
+              console.log('[115代理] /hls 上游200, 首120字=', raw.slice(0, 120).replace(/\n/g, ' | '));
+              const base = origSrc.replace(/[?#].*$/, '').replace(/\/[^/]*$/, '/');
+              let rewritten = '';
+              try {
+                const lines = raw.split(/\r?\n/);
+                let nextIsPlaylist = false;
+                // 同时处理 #EXT-X-KEY 的 URI 属性中的 URL
+                const keyUriRE = /^(#EXT-X-KEY:.*URI=")([^"]+)(".*)$/i;
+                const rewrittenLines = lines.map((line) => {
+                  const trimmed = line.trim();
+                  if (trimmed.startsWith('#')) {
+                    nextIsPlaylist = false;
+                    if (/^#EXT-X-STREAM-INF/i.test(trimmed) || /^#EXT-X-MEDIA/i.test(trimmed) || /^#EXT-X-I-FRAME-STREAM-INF/i.test(trimmed)) {
+                      nextIsPlaylist = true;
+                    }
+                    // 代理加密密钥 URI（AES-128 等）
+                    const km = trimmed.match(keyUriRE);
+                    if (km) {
+                      try {
+                        const keyAbs = /^https?:\/\//i.test(km[2]) ? km[2] : new URL(km[2], base).href;
+                        console.log('[115代理] KEY URI => /hls-segment:', keyAbs.slice(0, 100));
+                        return km[1] + '/hls-segment?src=' + encodeURIComponent(keyAbs) + km[3];
+                      } catch (_) {}
+                    }
+                    return line;
+                  }
+                  if (!trimmed) { nextIsPlaylist = false; return line; }
+                  try {
+                    const abs = /^https?:\/\//i.test(trimmed) ? trimmed : new URL(trimmed, base).href;
+                    if (nextIsPlaylist) {
+                      nextIsPlaylist = false;
+                      console.log('[115代理] 子playlist => /hls:', abs.slice(0, 100));
+                      return '/hls?src=' + encodeURIComponent(abs);
+                    }
+                    console.log('[115代理] 分片 => /hls-segment:', abs.slice(0, 100));
+                    return '/hls-segment?src=' + encodeURIComponent(abs);
+                  } catch (_) {
+                    nextIsPlaylist = false;
+                    return line;
+                  }
+                });
+                rewritten = rewrittenLines.join('\n');
+                console.log('[115代理] /hls 重写完成, 输出行数=', rewrittenLines.length, '输出首120字=', rewritten.slice(0, 120).replace(/\n/g, ' | '));
+              } catch (rewriteErr) {
+                console.error('[115代理] /hls 重写异常:', rewriteErr && rewriteErr.message);
+                res.writeHead(502, { 'Access-Control-Allow-Origin': '*' });
+                return res.end('rewrite error: ' + (rewriteErr && rewriteErr.message));
+              }
+              res.writeHead(200, {
+                'Content-Type': 'application/vnd.apple.mpegurl',
+                'Access-Control-Allow-Origin': '*',
+                'Cache-Control': 'no-cache',
+              });
+              res.end(rewritten);
+            });
+            hlsRes.stream.on('error', (e) => {
+              if (!res.headersSent) res.writeHead(502, { 'Access-Control-Allow-Origin': '*' });
+              res.end('hls stream error: ' + (e && e.message));
+            });
+          }).catch((e) => {
+            if (!res.headersSent) res.writeHead(502, { 'Access-Control-Allow-Origin': '*' });
+            res.end('hls fetch error: ' + (e && e.message));
+          });
+          return;
+        }
+        if (u.pathname === '/hls-segment') {
+          const segSrc = u.searchParams.get('src') || '';
+          if (!segSrc) { res.writeHead(400); return res.end('missing src'); }
+          const rangeHdr = req.headers['range'] || '';
+          const segHdrs = _mediaUpstreamHeaders('https://videoplay.115.com/');
+          if (rangeHdr) segHdrs['Range'] = rangeHdr;
+          _followGet(segSrc, {
+            method: req.method || 'GET',
+            timeout: 120000,
+            headers: segHdrs,
+          }).then((segRes) => {
+            const h = {
+              'Access-Control-Allow-Origin': '*',
+              'Content-Type': _guessContentType(segSrc),
+              'Cache-Control': 'no-cache',
+            };
+            const sh = segRes.headers || {};
+            h['Content-Length'] = sh['content-length'] || sh['content-range'] || undefined;
+            if (sh['content-range']) h['Content-Range'] = sh['content-range'];
+            if (sh['accept-ranges']) h['Accept-Ranges'] = sh['accept-ranges'];
+            console.log('[115代理] /hls-segment 上游 status=', segRes.statusCode, 'type=', _guessContentType(segSrc), 'url=', segSrc.slice(0, 100));
+            res.writeHead(segRes.statusCode || 200, h);
+            segRes.stream.pipe(res);
+            segRes.stream.on('error', (e) => {
+              console.error('[115代理] /hls-segment stream error:', e && e.message);
+              try { res.destroy(); } catch (_) {}
+            });
+          }).catch((e) => {
+            console.error('[115代理] /hls-segment fetch error:', e && e.message, 'url=', segSrc.slice(0, 100));
+            if (!res.headersSent) {
+              res.writeHead(502, { 'Access-Control-Allow-Origin': '*' });
+            }
+            try { res.end('seg error: ' + (e && e.message)); } catch (_) {}
+          });
+          req.on('close', () => {});
+          return;
+        }
+        if (u.pathname === '/stream') {
+          // 纯透传流式路由：完整指纹头 + Range 直达 115 CDN，流式 pipe。
+          // 115 是标准 CDN 原生支持 Range seek，无需内存窗口；seek 时每次新 Range 直达 CDN 即秒切。
+          let src = u.searchParams.get('src') || '';
+          if (!src && /^\/stream\//.test(u.pathname)) {
+            try { src = Buffer.from(u.pathname.slice('/stream/'.length), 'base64').toString('utf8'); } catch (_) { src = ''; }
+          }
+          if (!src) { res.writeHead(400, { 'Access-Control-Allow-Origin': '*' }); return res.end('missing src'); }
+          const rangeHdr = req.headers['range'] || '';
+          const stHdrs = _mediaUpstreamHeaders('https://videoplay.115.com/');
+          if (rangeHdr) stHdrs['Range'] = rangeHdr;
+          _followGet(src, {
+            method: req.method || 'GET',
+            timeout: 120000,
+            headers: stHdrs,
+          }).then((stRes) => {
+            if (stRes.statusCode !== 200 && stRes.statusCode !== 206) {
+              console.error('[115代理] /stream 上游失败 status=', stRes.statusCode, 'src=', src.slice(0, 100));
+              if (!res.headersSent) res.writeHead(502, { 'Access-Control-Allow-Origin': '*' });
+              try { res.end('upstream ' + stRes.statusCode); } catch (_) {}
+              try { stRes.stream.destroy(); } catch (_) {}
+              return;
+            }
+            const h = {
+              'Access-Control-Allow-Origin': '*',
+              'Content-Type': _guessContentType(src),
+              'Cache-Control': stRes.statusCode === 206 ? 'no-cache' : 'public, max-age=86400',
+            };
+            const sh = stRes.headers || {};
+            // 206 分段必须把 Content-Length 精确设置为本次 body 的实际字节数，
+            // 否则 Chromium 无法正确解封装/播放（可 seek 出帧但进入不了 playing）
+            if (sh['content-length'] && !sh['content-range']) {
+              h['Content-Length'] = sh['content-length'];
+            }
+            if (sh['content-range']) {
+              h['Content-Range'] = sh['content-range'];
+              const cm = /bytes\s+(\d+)-(\d+)\/(\d+)/i.exec(sh['content-range']);
+              if (cm) {
+                const segLen = Number(cm[2]) - Number(cm[1]) + 1;
+                if (segLen > 0) h['Content-Length'] = String(segLen);
+              }
+            }
+            if (sh['accept-ranges']) h['Accept-Ranges'] = sh['accept-ranges'];
+            if (sh['content-type']) h['Content-Type'] = sh['content-type'];
+            res.writeHead(stRes.statusCode || 200, h);
+            console.log('[115代理] /stream status=' + (stRes.statusCode || 200) + ' range=' + rangeHdr + ' CR=' + (h['Content-Range'] || '-') + ' CL=' + (h['Content-Length'] || '-') + ' src=' + src.slice(0, 90));
+            stRes.stream.pipe(res);
+            // aborted 是正常现象：Chromium 换 Range/seek 时会断开旧连接，静默忽略
+            const _onStreamErr = (e) => {
+              const msg = (e && e.message) || '';
+              if (/aborted/i.test(msg)) {
+                try { res.destroy(); } catch (_) {}
+                return;
+              }
+              console.error('[115代理] /stream stream error:', msg);
+              try { res.destroy(); } catch (_) {}
+            };
+            stRes.stream.on('error', _onStreamErr);
+            // 客户端断开时主动终止上游，避免泄漏
+            req.on('close', () => {
+              try { stRes.stream.destroy(); } catch (_) {}
+            });
+          }).catch((e) => {
+            console.error('[115代理] /stream fetch error:', e && e.message, 'src=', src.slice(0, 100));
+            if (!res.headersSent) res.writeHead(502, { 'Access-Control-Allow-Origin': '*' });
+            try { res.end('stream error: ' + (e && e.message)); } catch (_) {}
+          });
+          return;
+        }
+        let src = u.searchParams.get('src') || '';
         if (!src && u.pathname.startsWith('/v1/')) {
           try { src = Buffer.from(u.pathname.slice(4), 'base64').toString('utf8'); } catch (_) { src = ''; }
         }

@@ -2,13 +2,11 @@
 //  主进程入口
 //  职责：Chromium 开关 + 窗口创建 + 应用生命周期 + 启动流程
 // ============================================================
-const { app, BrowserWindow, Menu, session } = require('electron');
+const { app, BrowserWindow, Menu, session, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const db = require('../database/course-db');
-const syncService = require('../services/sync-service');
 const state = require('./state');
-const { registerCd2AuthInterceptor } = require('./cd2-auth');
 const { startMediaProxy } = require('./media-proxy');
 const { registerAll } = require('./ipc');
 
@@ -58,11 +56,12 @@ async function createWindow() {
     minHeight: 600,
     title: '在线课程学习平台',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
-    backgroundColor: '#0F172A',
+    backgroundColor: '#F5F3FF',
     show: false,
     paintWhenInitiallyHidden: true,
-    frame: true,
-    hasShadow: true,
+    frame: false,
+    titleBarStyle: 'hidden',
+    hasShadow: false,
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,
@@ -84,7 +83,6 @@ async function createWindow() {
     setImmediate(async () => {
       try {
         await db.initCourseDatabase();
-        await registerCd2AuthInterceptor();
         try {
           const cacheDir = path.join(app.getPath('userData'), 'Cache', 'media-cache');
           await session.defaultSession.setProxy({ mode: 'system' }).catch(() => {});
@@ -105,6 +103,11 @@ async function createWindow() {
 
   state.mainWindow.loadFile(path.join(__dirname, '..', 'src', 'index.html'));
 
+  // 将渲染进程 console 转发到主进程终端，方便用 npm run dev 排查前端日志
+  state.mainWindow.webContents.on('console-message', (_e, level, msg) => {
+    console.log('[renderer:' + level + '] ' + msg);
+  });
+
   state.mainWindow.on('will-move', () => {
     try { state.mainWindow.webContents.send('window-move-state', { moving: true }); } catch (_) {}
   });
@@ -121,6 +124,13 @@ async function createWindow() {
   state.mainWindow.on('closed', () => {
     state.mainWindow = null;
   });
+
+  state.mainWindow.on('maximize', () => {
+    try { state.mainWindow.webContents.send('window-maximize-change', true); } catch (_) {}
+  });
+  state.mainWindow.on('unmaximize', () => {
+    try { state.mainWindow.webContents.send('window-maximize-change', false); } catch (_) {}
+  });
 }
 
 // ===== 应用生命周期 =====
@@ -131,6 +141,26 @@ app.whenReady().then(async () => {
   // 注册所有 IPC 处理器
   registerAll();
 
+  // 注册无边框窗口控制 IPC
+  ipcMain.handle('window-minimize', () => {
+    const w = state.mainWindow;
+    if (w && !w.isDestroyed()) w.minimize();
+  });
+  ipcMain.handle('window-maximize', () => {
+    const w = state.mainWindow;
+    if (w && !w.isDestroyed()) {
+      if (w.isMaximized()) w.unmaximize(); else w.maximize();
+    }
+  });
+  ipcMain.handle('window-close', () => {
+    const w = state.mainWindow;
+    if (w && !w.isDestroyed()) w.close();
+  });
+  ipcMain.handle('window-is-maximized', () => {
+    const w = state.mainWindow;
+    return w && !w.isDestroyed() && w.isMaximized();
+  });
+
   // 并行启动：窗口显示 + 媒体代理 + 其它后台任务
   createWindow().catch(e => console.error('[boot] createWindow 异常:', e && e.message));
 
@@ -138,25 +168,6 @@ app.whenReady().then(async () => {
     // port 已通过 media-proxy 内部变量管理，无需额外处理
     console.log('[boot] 媒体代理端口:', port);
   }).catch(() => {});
-
-  try {
-    setTimeout(async () => {
-      console.log('[auto-sync] 开始后台自动同步');
-      try {
-        const r = await syncService.syncAll();
-        console.log('[auto-sync] 同步结果:', JSON.stringify(r));
-      } catch (e) {
-        console.error('[auto-sync] 后台同步异常:', e);
-      }
-      if (state.mainWindow && !state.mainWindow.isDestroyed()) {
-        try { state.mainWindow.webContents.send('sources-synced'); } catch (e) { console.error('[auto-sync] 通知前端失败:', e.message); }
-      } else {
-        console.log('[auto-sync] 主窗口不存在，跳过通知');
-      }
-    }, 1500);
-  } catch (e) {
-    console.error('启动自动同步失败:', e);
-  }
 });
 
 app.on('window-all-closed', () => {

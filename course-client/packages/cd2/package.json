@@ -1,7 +1,0 @@
-{
-  "name": "@andie/cd2",
-  "version": "1.0.0",
-  "description": "CloudDrive2 HTTP API 客户端封装",
-  "main": "index.js",
-  "license": "MIT"
-}

@@ -27,7 +27,9 @@
     "@grpc/grpc-js": "^1.10.6",
     "@grpc/proto-loader": "^0.8.1",
     "express": "^5.2.1",
+    "ffmpeg-static": "^5.3.0",
     "grpc-js-reflection-client": "^1.4.1",
+    "qrcode": "^1.5.4",
     "sql.js": "^1.14.2",
     "webdav": "^5.10.0"
   },
@@ -40,6 +42,7 @@
       "node_modules/sql.js/**/*",
       "node_modules/@andie/cd2/**/*",
       "node_modules/sql.js/dist/*.wasm",
+      "node_modules/ffmpeg-static/**/*",
       "packages/**/*"
     ],
     "compression": "maximum",

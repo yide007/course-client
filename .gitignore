@@ -9,3 +9,4 @@ Thumbs.db
 *.asar
 courses_data.json
 resources/images/covers/
+course-client/database/_data/

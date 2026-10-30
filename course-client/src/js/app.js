@@ -1,4 +1,4 @@
-﻿let currentPage = 'courses';
+let currentPage = 'courses';
 let currentCourseId = null;
 let currentVideoLessonId = null;
 let currentCategoryId = null;
@@ -6,6 +6,7 @@ let currentCategoryId = null;
 function closeModal() {
   document.getElementById('modal-overlay').classList.add('hidden');
   document.getElementById('modal-container').classList.remove('compact-toast');
+  document.getElementById('modal-container').classList.remove('course-modal');
   document.getElementById('modal-overlay').classList.remove('toast-overlay');
   try { if (window.focus) window.focus(); } catch (_) {}
 }
@@ -138,6 +139,11 @@ function escapeAttr(str) {
   return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function cssEscape(str) {
+  if (!str) return '';
+  return String(str).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 /** 自然排序：文件名里的数字按数值比较（让 1,2,...,9,10,11 正确排序，而非字典序 1,10,2） */
 function _naturalCmpStr(a, b) {
   var sa = String(a || ''), sb = String(b || '');
@@ -224,7 +230,6 @@ document.getElementById('video-overlay').addEventListener('click', function (e) 
           try {
             if (isModalOpen && firstTextInput && document.activeElement !== firstTextInput) {
               firstTextInput.focus();
-              if (typeof firstTextInput.select === 'function') firstTextInput.select();
             }
           } catch (_) {}
         }, t);
@@ -257,4 +262,50 @@ document.getElementById('video-overlay').addEventListener('click', function (e) 
     // 初始状态
     isModalOpen = !overlay.classList.contains('hidden');
   }
+})();
+
+// ── 无边框窗口控制 ──
+(function () {
+  var api = window.electronAPI;
+  if (!api) return;
+
+  var btnMin = document.getElementById('btn-minimize');
+  var btnMax = document.getElementById('btn-maximize');
+  var btnClose = document.getElementById('btn-close');
+  var maxIcon = document.getElementById('maximize-icon');
+
+  function updateMaxIcon(isMax) {
+    if (!maxIcon) return;
+    if (isMax) {
+      maxIcon.innerHTML = '<path d="M959.72 0H294.216a63.96 63.96 0 0 0-63.96 63.96v127.92H64.28A63.96 63.96 0 0 0 0.32 255.84V959.4a63.96 63.96 0 0 0 63.96 63.96h703.56a63.96 63.96 0 0 0 63.96-63.96V792.465h127.92a63.96 63.96 0 0 0 63.96-63.96V63.96A63.96 63.96 0 0 0 959.72 0zM767.84 728.505V959.4H64.28V255.84h703.56z m189.322 0H831.8V255.84a63.96 63.96 0 0 0-63.96-63.96H294.216V63.96H959.72z" fill="currentColor"/>';
+      maxIcon.setAttribute('viewBox', '0 0 1024 1024');
+      btnMax.title = '还原';
+    } else {
+      maxIcon.innerHTML = '<rect x="2.5" y="2.5" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="1"/>';
+      maxIcon.setAttribute('viewBox', '0 0 12 12');
+      btnMax.title = '最大化';
+    }
+  }
+
+  if (btnMin) btnMin.addEventListener('click', function () { try { api.windowMinimize(); } catch (_) {} });
+  if (btnMax) btnMax.addEventListener('click', function () { try { api.windowMaximize(); } catch (_) {} });
+  if (btnClose) btnClose.addEventListener('click', function () { try { api.windowClose(); } catch (_) {} });
+
+  // 登录页窗口控制
+  var loginMin = document.getElementById('login-btn-minimize');
+  var loginClose = document.getElementById('login-btn-close');
+  if (loginMin) loginMin.addEventListener('click', function () { try { api.windowMinimize(); } catch (_) {} });
+  if (loginClose) loginClose.addEventListener('click', function () { try { api.windowClose(); } catch (_) {} });
+
+  // 初始化最大化状态
+  try {
+    api.isWindowMaximized().then(function (isMax) { updateMaxIcon(!!isMax); }).catch(function () {});
+  } catch (_) {}
+
+  // 监听最大化状态变化
+  try {
+    if (typeof api.onWindowMaximizeChange === 'function') {
+      api.onWindowMaximizeChange(function (isMax) { updateMaxIcon(!!isMax); });
+    }
+  } catch (_) {}
 })();

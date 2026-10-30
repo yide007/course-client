@@ -1,25 +1,4 @@
-﻿// ===== 同步模式开关 =====
-// 开关含义：checked=开 → IP模式（127.0.0.1 本地同步 / 播放）
-//           unchecked=关 → 域名模式（yide2099.de5.net 云端同步 / 播放）
-const SYNC_DOMAIN_DEFAULT = 'yide2099.de5.net';
-const SYNC_DOMAIN_LOCAL = '127.0.0.1';
-let useLocalSync = localStorage.getItem('useLocalSync') === 'true';
-
-function getSyncDomain(originalDomain) {
-  return useLocalSync ? SYNC_DOMAIN_LOCAL : (originalDomain || SYNC_DOMAIN_DEFAULT);
-}
-
-function getSyncOptions(baseOpts) {
-  // 开关开启（IP模式）：临时使用 127.0.0.1 连接 CD2 同步章节，不覆盖课程持久化配置
-  // 开关关闭（域名模式）：固定使用 yide2099.de5.net
-  const overrideDomain = useLocalSync ? SYNC_DOMAIN_LOCAL : SYNC_DOMAIN_DEFAULT;
-  return {
-    ...baseOpts,
-    _connectOverride: { domain: overrideDomain, port: null },
-  };
-}
-
-// ========= 登录状态管理 =========
+// ===== 登录状态管理 =========
 let _currentLoginUser = null;
 
 function _updateUserInfoBar(user) {
@@ -31,7 +10,16 @@ function _updateUserInfoBar(user) {
   const roleTag = role === 'admin' ? '（管理员）' : '';
   nameEl.textContent = displayName + roleTag;
   const letter = displayName && displayName.length ? displayName.charAt(0).toUpperCase() : 'U';
-  if (avatarEl) avatarEl.textContent = letter;
+  if (user && user.avatar) {
+    avatarEl.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = user.avatar;
+    img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:10px;display:block;';
+    avatarEl.appendChild(img);
+  } else {
+    avatarEl.innerHTML = '';
+    avatarEl.textContent = letter;
+  }
 }
 
 function applyRoleVisibility(role) {
@@ -122,13 +110,12 @@ function setupLoginEvents() {
   }
 
   function _afterLoginSuccess(r) {
-    _currentLoginUser = { username: r.username, nickname: r.nickname, loginAt: r.loginAt, role: r.role || 'user' };
+    _currentLoginUser = { username: r.username, nickname: r.nickname, avatar: r.avatar || '', loginAt: r.loginAt, role: r.role || 'user' };
     _updateUserInfoBar(_currentLoginUser);
     applyRoleVisibility(_currentLoginUser.role);
     try { _installVideoClickControls(); } catch (_) {}
     try {
       initNavigation();
-      initLocalSyncToggle();
       setupEventListeners();
     } catch (_) {}
     const scheduleDataLoad = () => {
@@ -256,13 +243,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const r = await api.checkLoginStatus();
     if (r && r.loggedIn) {
-      _currentLoginUser = { username: r.username, nickname: r.nickname, loginAt: r.loginAt, role: r.role || 'user' };
+      _currentLoginUser = { username: r.username, nickname: r.nickname, avatar: r.avatar || '', loginAt: r.loginAt, role: r.role || 'user' };
       _updateUserInfoBar(_currentLoginUser);
       applyRoleVisibility(_currentLoginUser.role);
       try { _installVideoClickControls(); } catch (_) {}
       try {
         initNavigation();
-        initLocalSyncToggle();
         setupEventListeners();
       } catch (_) {}
       const scheduleDataLoad = () => {
@@ -284,36 +270,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 });
 
-function _refreshModeLabels(checked) {
-  const ipLabel = document.querySelector('.toggle-mode-ip');
-  const domainLabel = document.querySelector('.toggle-mode-domain');
-  if (ipLabel) ipLabel.classList.toggle('active', !!checked);
-  if (domainLabel) domainLabel.classList.toggle('active', !checked);
-}
-let _localSyncToggleInited = false;
-function initLocalSyncToggle() {
-  const toggle = document.getElementById('local-sync-toggle');
-  const hint = document.getElementById('local-sync-hint');
-  if (!toggle) return;
-  if (_localSyncToggleInited) return;
-  _localSyncToggleInited = true;
-  toggle.checked = useLocalSync;
-  _refreshModeLabels(useLocalSync);
-  hint.textContent = useLocalSync
-    ? 'IP 同步：从 127.0.0.1 拉取章节与本地播放'
-    : '域名同步：从 yide2099.de5.net 拉取章节与播放';
-  console.log('[同步模式] 初始状态:', useLocalSync ? 'IP模式(开)' : '域名模式(关)');
-  toggle.addEventListener('change', () => {
-    useLocalSync = toggle.checked;
-    localStorage.setItem('useLocalSync', useLocalSync);
-    _refreshModeLabels(useLocalSync);
-    hint.textContent = useLocalSync
-      ? 'IP 同步：从 127.0.0.1 拉取章节与本地播放'
-      : '域名同步：从 yide2099.de5.net 拉取章节与播放';
-    console.log('[同步模式] 状态切换:', useLocalSync ? 'IP模式(开)' : '域名模式(关)');
-  });
-}
-
 let _navigationInited = false;
 function initNavigation() {
   if (_navigationInited) return;
@@ -325,4 +281,3 @@ function initNavigation() {
     });
   });
 }
-

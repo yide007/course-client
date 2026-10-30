@@ -22,6 +22,7 @@ function register() {
       username: saved.username || '',
       loginAt: saved.loginAt || 0,
       nickname: saved.nickname || '',
+      avatar: saved.avatar || '',
       role,
     };
   });
@@ -35,12 +36,14 @@ function register() {
     let ok = false;
     let storedPwd = '';
     let nickname = '';
+    let avatar = '';
     let role = ROLE_USER;
 
     const listUser = findUserInList(u);
     if (listUser) {
       storedPwd = listUser.password || '';
       nickname = listUser.nickname || u;
+      avatar = listUser.avatar || '';
       role = listUser.role || ROLE_USER;
       ok = (storedPwd === p);
       if (!ok) return { success: false, error: '密码错误' };
@@ -49,6 +52,7 @@ function register() {
       if (builtin && builtin.password === p) {
         ok = true;
         nickname = builtin.nickname || u;
+        avatar = builtin.avatar || '';
         role = builtin.role || ROLE_USER;
         const users = ensureUsersFile();
         users.push({ ...builtin });
@@ -64,12 +68,13 @@ function register() {
       username: u,
       password: ok ? (storedPwd || p) : '',
       nickname,
+      avatar,
       role,
       loginAt: Date.now(),
       isRegistered: true,
     };
     writeLoginFile(data);
-    return { success: true, username: u, nickname, loginAt: data.loginAt, role };
+    return { success: true, username: u, nickname, avatar, loginAt: data.loginAt, role };
   });
 
   ipcMain.handle('do-logout', async () => {
@@ -79,6 +84,7 @@ function register() {
         username: saved.username || '',
         password: saved.password || '',
         nickname: saved.nickname || '',
+        avatar: saved.avatar || '',
         role: saved.role || '',
         isRegistered: saved.isRegistered || false,
       };
@@ -112,6 +118,7 @@ function register() {
       username: saved.username,
       password: np,
       nickname,
+      avatar: saved.avatar || '',
       role,
       loginAt: Date.now(),
       isRegistered: true,
@@ -125,12 +132,13 @@ function register() {
     return users.map(u => ({
       username: u.username,
       nickname: u.nickname || u.username,
+      avatar: u.avatar || '',
       role: u.role || ROLE_USER,
     }));
   });
 
   ipcMain.handle('add-user', async (_event, params) => {
-    const { username, password, nickname, role } = params || {};
+    const { username, password, nickname, role, avatar } = params || {};
     const u = String(username || '').trim();
     const p = String(password || '').trim();
     if (!u || !p) return { success: false, error: '用户名和密码不能为空' };
@@ -145,6 +153,7 @@ function register() {
       username: u,
       password: p,
       nickname: String(nickname || u),
+      avatar: avatar ? String(avatar) : '',
       role: role === ROLE_ADMIN ? ROLE_ADMIN : ROLE_USER,
     });
     writeUsersFile(users);
@@ -152,7 +161,7 @@ function register() {
   });
 
   ipcMain.handle('update-user', async (_event, params) => {
-    const { username, password, nickname, role } = params || {};
+    const { username, password, nickname, role, avatar } = params || {};
     const u = String(username || '').trim();
     if (!u) return { success: false, error: '用户名不能为空' };
 
@@ -171,7 +180,25 @@ function register() {
     if (role !== undefined && role !== null) {
       users[idx].role = role === ROLE_ADMIN ? ROLE_ADMIN : ROLE_USER;
     }
+    if (avatar !== undefined && avatar !== null) {
+      users[idx].avatar = avatar ? String(avatar) : '';
+    }
     writeUsersFile(users);
+
+    // 若修改的是当前登录用户，同步更新登录态文件中的头像
+    const saved = readLoginFile();
+    if (saved && saved.username === u) {
+      const keep = {
+        username: saved.username,
+        password: saved.password || '',
+        nickname: users[idx].nickname || saved.nickname || '',
+        avatar: users[idx].avatar || '',
+        role: users[idx].role || saved.role || '',
+        loginAt: saved.loginAt || Date.now(),
+        isRegistered: saved.isRegistered !== false,
+      };
+      writeLoginFile(keep);
+    }
     return { success: true };
   });
 

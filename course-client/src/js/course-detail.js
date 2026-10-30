@@ -1,6 +1,55 @@
-﻿async function viewCourseDetail(courseId) {
+async function _renderTopbarNav(targetPage, onBack, title) {
+  const topbarLeft = document.getElementById('topbar-left');
+  if (!topbarLeft) return;
+  const topbar = topbarLeft.closest('.topbar');
+  if (topbar) topbar.style.display = 'flex';
+  const titleHtml = title
+    ? '<span style="font-size:16px;font-weight:700;color:#0f172a;margin-left:8px;vertical-align:middle;max-width:480px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeAttr(title) + '">' + escapeHtml(title) + '</span>'
+    : '';
+  topbarLeft.innerHTML =
+    '<button type="button" class="icon-btn" id="topbar-back-btn" title="返回"><span class="icon-btn-icon">⬅</span></button>' +
+    '<button type="button" class="icon-btn" id="topbar-home-btn" title="主页"><span class="icon-btn-icon">🏠</span></button>' +
+    titleHtml;
+  const backBtn = topbarLeft.querySelector('#topbar-back-btn');
+  const homeBtn = topbarLeft.querySelector('#topbar-home-btn');
+  if (backBtn) {
+    backBtn.addEventListener('click', () => {
+      if (typeof onBack === 'function') onBack();
+      else if (typeof navigateTo === 'function') navigateTo(targetPage);
+    });
+  }
+  if (homeBtn) {
+    homeBtn.addEventListener('click', () => {
+      if (typeof navigateTo === 'function') navigateTo('courses');
+    });
+  }
+}
+
+function _clearTopbarNav() {
+  const topbarLeft = document.getElementById('topbar-left');
+  if (topbarLeft) topbarLeft.innerHTML = '';
+}
+
+function _renderTopbarTitle(title, actionHtml) {
+  const topbarLeft = document.getElementById('topbar-left');
+  if (!topbarLeft) return;
+  const topbar = topbarLeft.closest('.topbar');
+  if (topbar) topbar.style.display = 'flex';
+  let html = '<span style="font-size:18px;font-weight:700;color:#0f172a;margin-right:12px;">' + escapeHtml(title) + '</span>';
+  if (actionHtml) html += actionHtml;
+  topbarLeft.innerHTML = html;
+}
+
+async function viewCourseDetail(courseId) {
   try {
+    // 切换课程前：保存旧课程播放进度，避免进度丢失
+    if (typeof _saveCurrentProgress === 'function') {
+      try { _saveCurrentProgress(); } catch (_) {}
+    }
+    // 重置当前播放课时 ID，避免旧课程残留导致上一集/下一集定位错乱
+    currentVideoLessonId = null;
     currentCourseId = courseId;
+    currentPage = 'detail';
     const detail = await api.getCourseDetail(courseId);
     if (!detail) {
       console.error('[detail] 课程不存在:', courseId);
@@ -26,15 +75,29 @@
       _getCachedCategories(),
     ]);
 
+    // 防止异步返回时用户已切换到其他页面，覆盖顶部工具栏
+    if (currentPage !== 'detail') return;
+
     // 切换到详情页
     document.querySelectorAll('.page').forEach((p) => p.classList.remove('active'));
     const pageEl = document.getElementById('page-detail');
     pageEl.classList.add('active');
 
+    // 进入详情页隐藏侧边栏
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) sidebar.classList.add('hidden');
+
+    // 隐藏详情页的 page-header，把返回/主页按钮移到顶部工具栏左侧
+    const detailHeader = pageEl.querySelector('.page-header');
+    if (detailHeader) detailHeader.style.display = 'none';
+    _renderTopbarNav('courses', null, detail.title);
+
     // 取消侧边栏高亮
     document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
 
     document.getElementById('detail-title').textContent = detail.title;
+    // 暂时关闭预热：改为点击哪个就下载哪个，避免预热与播放冲突
+    // _startP115LessonWarmup(detail);
 
     const progressMap = {};
     (progress || []).forEach((p) => { progressMap[p.lessonId] = p; });
@@ -44,10 +107,10 @@
 
     // ===== 左上：同步提示 =====
     const lessonTotal = (detail.chapters || []).reduce((s, c) => s + ((c.lessons || []).length), 0);
-    // 手动模式识别：_manual=true，或【没有有效token】（token为空时无法从云盘扫描，强制显示添加内容按钮）
+    // 手动模式识别：_manual=true；或者【没有有效 token 且非 netdisk 网盘课程】
     const hasRealToken = Boolean(String(detail.token || '').trim() && String(detail.token || '').trim().toLowerCase() !== 'null');
-    const isManualCourse = Boolean(detail._manual) || !hasRealToken;
-    const hasCd2 = !isManualCourse && hasRealToken;
+    const isNetdiskCourse = detail.courseMode === 'netdisk';
+    const isManualCourse = Boolean(detail._manual) || (!hasRealToken && !isNetdiskCourse);
     const showActionBtn = _currentLoginUser && _currentLoginUser.role === 'admin';
 
     // ===== 左下：课程目录 =====
@@ -135,10 +198,11 @@
           var safeTitle = escapeHtml(l.title || '');
           var safeVideoUrl = escapeAttr(l.videoUrl || '');
           var safeVideoUrlLocal = escapeAttr(l.videoUrlLocal || '');
+          var safeVideoSource = escapeAttr(l.videoSource ? (typeof l.videoSource === 'string' ? l.videoSource : JSON.stringify(l.videoSource)) : '');
           var duration = l.duration || '00:00';
           var sourcePath = l.path || '';
           var iconHtml = completed ? '✅' : '🎬';
-          return '<li class="lesson-item ' + (completed ? 'completed' : '') + '" data-lesson-id="' + l.id + '" data-video-url="' + safeVideoUrl + '" data-video-url-local="' + safeVideoUrlLocal + '" data-course-id="' + detail.id + '" data-title="' + safeTitle + '">' +
+          return '<li class="lesson-item ' + (completed ? 'completed' : '') + '" data-lesson-id="' + l.id + '" data-video-url="' + safeVideoUrl + '" data-video-url-local="' + safeVideoUrlLocal + '" data-video-source="' + safeVideoSource + '" data-course-id="' + detail.id + '" data-title="' + safeTitle + '">' +
             '<span>' + iconHtml + '</span>' +
             '<span>' + safeTitle + '</span>' +
             (l.isFree ? '<span class="lesson-free-badge">免费</span>' : '') +
@@ -383,9 +447,9 @@
     let actionBtnHtml = '';
     if (showActionBtn) {
       if (isManualCourse) {
-        actionBtnHtml = `<button id="btn-manage-content" class="btn btn-xs" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;border:none;box-shadow:0 2px 6px rgba(139,92,246,0.3);">➕ 添加课程内容</button>`;
+        actionBtnHtml = `<button id="btn-manage-content" class="btn btn-xs" style="background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;border:none;box-shadow:0 2px 6px rgba(139,92,246,0.3);">✏️ 课程编辑</button>`;
       } else {
-        actionBtnHtml = `<button id="btn-rebuild-chapters" class="btn btn-xs btn-rebuild-chapters">🔄 更新课程目录</button>`;
+        actionBtnHtml = `<button id="btn-rebuild-chapters" class="btn btn-xs btn-rebuild-chapters">🔄 更新课程</button>`;
       }
     }
     chaptersHeaderEl.innerHTML =
@@ -399,73 +463,33 @@
         : (isManualCourse
           ? `<div style="padding:36px 20px;text-align:center;">
               <div style="font-size:40px;margin-bottom:10px;">📝</div>
-              <p style="color:#64748b;font-size:13px;margin-bottom:14px;">暂无章节内容，点击右上角「添加课程内容」开始创建</p>
+              <p style="color:#64748b;font-size:13px;margin-bottom:14px;">暂无章节内容，点击右上角「课程编辑」开始创建</p>
             </div>`
           : '<p style="color:#94a3b8;padding:20px 0;">暂无课程章节内容</p>'));
 
-    // ===== 手动模式：「添加课程内容」按钮 → 跳课程管理章节管理 =====
+    // ===== 手动模式：「课程编辑」按钮 → 跳课程管理章节管理页 =====
     const contentBtn = document.getElementById('btn-manage-content');
     if (contentBtn) {
       contentBtn.addEventListener('click', () => {
-        navigateTo('course-mgmt');
         openChapterMgmt(detail.id);
       });
     }
 
-    // ===== 按钮：从云盘同步章节 =====
+    // ===== 网盘课程：「更新课程」按钮 → 打开 115 网盘选择器，同步文件夹到当前课程 =====
     const rebuildBtn = document.getElementById('btn-rebuild-chapters');
     if (rebuildBtn) {
-      rebuildBtn.addEventListener('click', async () => {
-        console.log('========== [步骤1/9] 前端：点击「从云盘同步章节」按钮 ==========');
-        const syncDomain = detail.domain || '';
-        const syncPort = detail.port || '';
-        const syncHost = syncDomain + (syncPort ? ':' + syncPort : '');
-        const curMode = useLocalSync ? 'IP' : '域名';
-        const curDomain = useLocalSync ? SYNC_DOMAIN_LOCAL : SYNC_DOMAIN_DEFAULT;
-        console.log('[步骤1] 课程配置 → domain:', syncDomain, 'port:', syncPort, 'sourcePath:', detail.sourcePath || '/', '同步模式:', curMode, '→', curDomain);
-        const label = `【${curMode}模式】将从 ${curDomain} 连接云盘，拉取最新章节\n※ 当前课程持久化配置：${syncHost || '（未配置）'}`;
-        console.log('[步骤2/9] 准备同步，配置信息：', label);
-        rebuildBtn.disabled = true;
-        rebuildBtn.textContent = '同步中…';
-        let syncSuccess = false;
-        try {
-          const syncOpts = getSyncOptions({ courseId: detail.id, sourcePath: detail.sourcePath || '/' });
-          console.log('[步骤3/9] 准备调用 IPC → 参数:', JSON.stringify(syncOpts, null, 2));
-          const t0 = Date.now();
-          const r = await api.rebuildCourseChapters(syncOpts);
-          const cost = ((Date.now() - t0) / 1000).toFixed(2);
-          console.log('[步骤8/9] IPC 返回结果 → 耗时:', cost + 's, 响应:', JSON.stringify(r, null, 2));
-          if (!r || !r.success) throw new Error((r && r.error) || '同步失败');
-          syncSuccess = true;
-          showToastModal({
-            type: 'success',
-            title: '同步成功',
-            compact: true,
-            autoClose: 3000
-          });
-        } catch (e) {
-          console.error('[步骤X] 同步异常 →', e.message || e, e.stack || '');
-          showToastModal({
-            type: 'error',
-            title: '同步失败',
-            message: e.message || String(e)
-          });
-        } finally {
-          rebuildBtn.disabled = false;
-          rebuildBtn.innerHTML = '🔄 更新课程目录';
-          console.log('[步骤9/9] 按钮状态已恢复');
-        }
-        if (syncSuccess) {
-          console.log('[步骤9] 同步成功，开始刷新页面 → viewCourseDetail + loadCourses');
-          viewCourseDetail(detail.id);
-          loadCourses();
+      rebuildBtn.addEventListener('click', () => {
+        if (typeof showP115UpdateWizard === 'function') {
+          showP115UpdateWizard(detail.id);
+        } else {
+          console.error('[detail] showP115UpdateWizard 未定义，请检查脚本加载顺序');
         }
       });
     }
 
     // ===== 右下：课程简介 =====
     const descEl = document.getElementById('detail-description');
-    descEl.textContent = detail.description || '暂无课程简介';
+    if (descEl) descEl.textContent = detail.description || '暂无课程简介';
 
     // ===== 播放器重置 + 课程封面图显示 =====
     const player = document.getElementById('detail-player');
@@ -541,6 +565,7 @@
         const lessonId = parseInt(item.dataset.lessonId);
         const videoUrl = item.dataset.videoUrl || '';
         const videoUrlLocal = item.dataset.videoUrlLocal || '';
+        const videoSource = item.dataset.videoSource || '';
         const title = item.dataset.title || '';
         // 切新课前先保存当前课时的进度到 DB + 更新 progressMap
         if (currentVideoLessonId) {
@@ -558,7 +583,18 @@
           }
         }
         _saveCurrentProgress();
-        playVideo(lessonId, title, videoUrl, videoUrlLocal, detail.id, item);
+        if (!videoUrl && !videoUrlLocal) {
+          if (videoSource) {
+            // 115 存储网盘课时：元数据在 videoSource 里，需要异步获取播放地址
+            playP115Lesson(lessonId, title, videoSource, detail.id, item);
+          } else {
+            // 既无直接地址、也无网盘源：说明是旧数据，需要重新从 115 网盘添加
+            console.warn('[课时播放] 课时无视频源: lessonId=' + lessonId + ' title="' + title + '"');
+            alert('该课时没有可播放的视频源。\n请删除该课程并在 115 网盘中重新添加（旧课程缺少播放元数据）。');
+          }
+        } else {
+          playVideo(lessonId, title, videoUrl, videoUrlLocal, detail.id, item);
+        }
         // 恢复该课时的播放进度（从 progressMap 中取 lastPosition）
         const saved = progressMap[lessonId];
         if (saved && !saved.completed && saved.lastPosition > 2) {
@@ -582,6 +618,60 @@
         }
       });
     });
+
+    function _scrollIntoViewAllAncestors(el) {
+      if (!el) return;
+      const scrollables = [];
+      let parent = el.parentElement;
+      while (parent && parent !== document.body) {
+        const style = window.getComputedStyle(parent);
+        const overflowY = style.overflowY;
+        if (overflowY === 'auto' || overflowY === 'scroll') {
+          scrollables.push(parent);
+        }
+        parent = parent.parentElement;
+      }
+      scrollables.reverse().forEach(sc => {
+        const pRect = sc.getBoundingClientRect();
+        const elRect = el.getBoundingClientRect();
+        const offset = (elRect.top - pRect.top) + sc.scrollTop
+          - (sc.clientHeight / 2) + (elRect.height / 2);
+        sc.scrollTo({ top: offset, behavior: 'smooth' });
+      });
+    }
+
+    function _navigateLesson(direction) {
+      const allLessons = Array.from(chaptersEl.querySelectorAll('.lesson-item'));
+      if (allLessons.length === 0) return;
+      let currentIdx = -1;
+      if (currentVideoLessonId != null) {
+        currentIdx = allLessons.findIndex(el => parseInt(el.dataset.lessonId) === currentVideoLessonId);
+      }
+      let targetIdx;
+      if (currentIdx === -1) {
+        // 没有当前播放的课时：下一集从第1集开始，上一集无效
+        targetIdx = direction > 0 ? 0 : -1;
+      } else {
+        targetIdx = currentIdx + direction;
+      }
+      if (targetIdx < 0 || targetIdx >= allLessons.length) return;
+      const targetLesson = allLessons[targetIdx];
+      targetLesson.click();
+      _scrollIntoViewAllAncestors(targetLesson);
+    }
+    const prevBtn = document.getElementById('btn-prev-lesson');
+    const nextBtn = document.getElementById('btn-next-lesson');
+    // 常驻按钮：先移除旧监听再绑定新的，避免多次进入详情页后监听器累积（导致点一次触发多次）
+    if (prevBtn) {
+      if (prevBtn._prevLessonHandler) prevBtn.removeEventListener('click', prevBtn._prevLessonHandler);
+      prevBtn._prevLessonHandler = () => _navigateLesson(-1);
+      prevBtn.addEventListener('click', prevBtn._prevLessonHandler);
+    }
+    if (nextBtn) {
+      if (nextBtn._nextLessonHandler) nextBtn.removeEventListener('click', nextBtn._nextLessonHandler);
+      nextBtn._nextLessonHandler = () => _navigateLesson(1);
+      nextBtn.addEventListener('click', nextBtn._nextLessonHandler);
+    }
 
     // ===== 事件绑定：PDF预览按钮（带鉴权下载到本地后用系统默认阅读器打开） =====
     chaptersEl.querySelectorAll('.pdf-btn-open').forEach((btn) => {
@@ -644,51 +734,6 @@
       });
     });
 
-    // ===== 自动同步：仅当章节为空（首次进入）时，从云盘拉取章节 =====
-    const canAutoSync = Boolean((detail.domain && detail.domain.trim()) && (detail.token && detail.token.trim()));
-    const chaptersEmpty = !(detail.chapters && detail.chapters.length > 0);
-    if (canAutoSync && chaptersEmpty) {
-      const autoTipEl = document.createElement('div');
-      autoTipEl.id = 'detail-auto-sync-tip';
-      autoTipEl.style.cssText = 'margin-top:10px;padding:6px 10px;border-radius:6px;background:#eff6ff;color:#1d4ed8;font-size:12px;';
-      autoTipEl.textContent = '🔄 正在从云盘同步最新章节…';
-      const chaptersWrap = document.getElementById('detail-chapters');
-      if (chaptersWrap) chaptersWrap.appendChild(autoTipEl);
-
-      // 用 setTimeout 让首屏先渲染出来，不阻塞用户
-      setTimeout(async () => {
-        try {
-          const r = await api.rebuildCourseChapters(getSyncOptions({ courseId: detail.id, sourcePath: detail.sourcePath || '/' }));
-          if (r && r.success) {
-            if (tip) {
-              tip.style.background = '#ecfdf5';
-              tip.style.color = '#047857';
-              tip.textContent = `✓ 同步完成：${r.chapters} 章 ${r.lessons} 集，页面即将刷新`;
-            }
-            setTimeout(() => {
-              // 如果当前用户没有在播放视频，安全地直接 reload 详情
-              const player = document.getElementById('detail-player');
-              const playing = player && !player.paused && !player.ended && player.currentTime > 0;
-              if (!playing) viewCourseDetail(detail.id);
-            }, 700);
-          } else {
-            if (tip) {
-              tip.style.background = '#fef2f2';
-              tip.style.color = '#b91c1c';
-              tip.textContent = '⚠️ 自动同步失败：' + ((r && r.error) || '未知错误') + '（可稍后点右上角按钮重试）';
-            }
-          }
-        } catch (e) {
-          const tip = document.getElementById('detail-auto-sync-tip');
-          if (tip) {
-            tip.style.background = '#fef2f2';
-            tip.style.color = '#b91c1c';
-            tip.textContent = '⚠️ 自动同步异常：' + (e.message || e);
-          }
-        }
-      }, 400);
-    }
-
     // ===== 自动恢复：回到详情页时跳转到上一次播放的课时 + 恢复播放进度 =====
     setTimeout(() => {
       try {
@@ -744,22 +789,242 @@
   }
 }
 
+// 后台预热本课程的 115 课时：串行提前调一次播放接口，把转码/排队顶上去，
+// 之后用户点开对应课时时命中后端预热缓存，即点即播（接近边下边播）。
+let _warmupAborted = false;
+function _startP115LessonWarmup(detail) {
+  if (!api || typeof api.warm115Lesson !== 'function') return;
+  const tasks = [];
+  (detail.chapters || []).forEach((c) => {
+    (c.lessons || []).forEach((l) => {
+      let src = null;
+      try { src = typeof l.videoSource === 'object' ? l.videoSource : JSON.parse(l.videoSource || 'null'); } catch (_) { src = null; }
+      const cfgId = src && src.cfgId;
+      const pickCode = src && src.pickCode;
+      if (cfgId && pickCode) tasks.push({ cfgId, pickCode });
+    });
+  });
+  if (!tasks.length) return;
+  _warmupAborted = false;
+  const MAX = 12; // 每个课程最多预热前若干个，避免无谓消耗
+  let idx = 0, done = 0;
+  const run = () => {
+    if (_warmupAborted || currentPage !== 'detail') return;
+    if (idx >= tasks.length || done >= MAX) return;
+    const t = tasks[idx++];
+    api.warm115Lesson(t.cfgId, t.pickCode)
+      .then((r) => { if (r && r.success) done++; })
+      .catch(() => {})
+      .finally(() => setTimeout(run, 300));
+  };
+  setTimeout(run, 800);
+}
+
+// 115 存储网盘课时：解析 video_source 元数据，从后端读取播放地址后再交给 playVideo 播放
+async function playP115Lesson(lessonId, title, videoSource, courseId, lessonEl) {
+  currentVideoLessonId = lessonId;
+  currentCourseId = courseId;
+
+  let cfgId = '';
+  let pickCode = '';
+  try {
+    const src = typeof videoSource === 'string' ? JSON.parse(videoSource) : videoSource;
+    cfgId = src && src.cfgId;
+    pickCode = src && src.pickCode;
+  } catch (_) {}
+  if (!cfgId || !pickCode) {
+    alert('课时缺少 115 播放信息（cfgId/pickCode）');
+    return;
+  }
+
+  // 标记当前课时为"播放中"
+  if (lessonEl && document.getElementById('page-detail').classList.contains('active')) {
+    const chaptersEl = document.getElementById('detail-chapters');
+    if (chaptersEl) chaptersEl.querySelectorAll('.lesson-item').forEach((li) => li.classList.remove('playing'));
+    lessonEl.classList.add('playing');
+  }
+
+  const titleEl = document.getElementById('detail-player-subtitle');
+  const playerArea = document.getElementById('detail-player-area');
+  const player = document.getElementById('detail-player');
+  const coverEl = document.getElementById('detail-player-cover');
+  let spinner = null;
+  const _rmSpinner = () => {
+    if (spinner && spinner.parentNode) { try { spinner.parentNode.removeChild(spinner); } catch (_) {} }
+    spinner = null;
+  };
+  if (playerArea) {
+    if (coverEl) coverEl.style.display = 'none';
+    if (player) player.style.display = 'block';
+    spinner = playerArea.parentElement ? playerArea.parentElement.querySelector(':scope > .video-loading-spinner') : null;
+    if (!spinner) {
+      spinner = document.createElement('div');
+      spinner.className = 'video-loading-spinner';
+      if (playerArea.parentElement) playerArea.parentElement.appendChild(spinner);
+    }
+    spinner.style.display = 'inline-flex';
+    spinner.textContent = '正在下载视频…（原画直链，请稍候）';
+  }
+  if (titleEl) titleEl.textContent = title;
+  // ===== 切课时立即清掉上一课的画面，避免旧视频残影造成"没跳转"的错觉 =====
+  try {
+    if (player) {
+      player.pause();
+      player.removeAttribute('src');
+      player.load();
+      if (typeof _resetVideoForNext === 'function') { try { _resetVideoForNext(player); } catch (_) {} }
+    }
+  } catch (_) {}
+
+  try {
+    // 🔴 边下边播：取原画直链，不落盘，直接走本地流式代理让 <video> 边下边播
+    //    原画直链（/open/ufile/downurl）无需转码即可 Range 分片，是边下边播的前提
+    const r = await api.get115LessonUrl(cfgId, pickCode);
+    if (!r || !r.success) {
+      _rmSpinner();
+      const errMsg = (r && r.error) || '未知错误';
+      if (titleEl) titleEl.textContent = '⚠️ ' + title + ' - 获取地址失败';
+      console.error('[115课程播放] 获取播放地址失败:', errMsg);
+      alert('获取播放地址失败：' + errMsg);
+      return;
+    }
+    const directUrl = r.directUrl || r.url || r.bestUrl || '';
+    if (!directUrl) {
+      _rmSpinner();
+      alert('未获取到有效的 115 原画直链');
+      return;
+    }
+    console.log('[115课程播放] 原画直链:', directUrl.slice(0, 120));
+
+    // 构造 /stream 代理地址（mpegts 层 / 方案A 层均需要）
+    let streamUrl = directUrl;
+    try { streamUrl = await window.P115Play.resolveStreamUrl(directUrl, r.streamUrl); } catch (_) {}
+    console.log('[115课程播放] 流式代理地址:', streamUrl.slice(0, 120));
+
+    const fileName = r.fileName || '';
+    const _spinnerText = (t) => { if (spinner) { try { spinner.style.display = 'inline-flex'; spinner.textContent = t; } catch (_) {} } };
+
+    // ─── Native-first：MKV 等容器 Chrome 实际支持 H.264+AAC，先尝试 <video> 原生播放 ───
+    if (window.P115Play && window.P115Play.canNativeFirst && window.P115Play.canNativeFirst(fileName)) {
+      var detailPlayer2 = document.getElementById('detail-player');
+      if (detailPlayer2) {
+        console.log('[115] 尝试原生播放（MKV 等容器）');
+        _spinnerText('正在加载…');
+        detailPlayer2.src = streamUrl;
+        var _nfErr2 = false;
+        var _nfHandler2 = function () { _nfErr2 = true; };
+        detailPlayer2.addEventListener('error', _nfHandler2, { once: true });
+        await new Promise(function (r) { setTimeout(r, 3000); });
+        try { detailPlayer2.removeEventListener('error', _nfHandler2); } catch (_) {}
+        if (!_nfErr2 && detailPlayer2.duration && isFinite(detailPlayer2.duration) && detailPlayer2.duration > 0) {
+          console.log('[115] 原生播放成功 ✓');
+          _rmSpinner();
+          playVideo(lessonId, title, streamUrl, '', courseId, lessonEl);
+          return;
+        }
+        console.log('[115] 原生播放失败，降级转封装');
+        try { detailPlayer2.pause(); } catch (_) {}
+        detailPlayer2.removeAttribute('src');
+        detailPlayer2.load();
+      }
+    }
+
+    // ===== 采用与"网盘课程/选择器"相同的播放策略（判定逻辑隔离在 P115Play 模块，低耦合）=====
+    //   三层降级：mpegts.js 直解秒开 → 流式转封装边转边播 → 全量转封装
+    //   FLV 直接全量转封装（放弃秒播分层），TS/M2TS/MKV 等才走 mpegts/流式
+    if (window.P115Play && window.P115Play.needsRemux(fileName)) {
+      var detailPlayer = document.getElementById('detail-player');
+      var _isFlv = window.P115Play.isFlv && window.P115Play.isFlv(fileName);
+
+      if (!_isFlv) {
+      // ─── Layer 1：mpegts.js 直解（TS/M2TS，零转码真·首播秒开；FLV 跳过）───
+      if (!_isFlv && window.P115Play.canMpegts(fileName)) {
+        _spinnerText('正在解码…');
+        var mpegtsResult = await window.P115Play.tryMpegts(detailPlayer, streamUrl, 15000);
+        if (mpegtsResult && mpegtsResult.success) {
+          console.log('[115] mpegts 播放中（零转码秒开）');
+          _rmSpinner();
+          if (detailPlayer) detailPlayer._p115MpegtsReady = true;
+          playVideo(lessonId, title, streamUrl, '', courseId, lessonEl);
+          return;
+        }
+        console.log('[115] mpegts 失败，降级到流式转封装（' + ((mpegtsResult && mpegtsResult.error) || 'unknown') + '）');
+      }
+
+      // ─── Layer 2：流式转封装（方案A：ffmpeg 边拉边转 fMP4 → /watch 约1-2s出画面；FLV 直接走此层主力）───
+      _spinnerText('正在边转边播…');
+      var _l2Failed = false;
+      var _l2ErrMsg = '';
+      try {
+        var streamR = await window.P115Play.playStreamingRemux(cfgId, pickCode);
+        if (streamR && streamR.success && streamR.watchUrl) {
+          console.log('[115] 流式转封装播放 watchUrl=' + String(streamR.watchUrl).slice(0, 100));
+          var _l2fallback = false;
+          var _l2err = function () { _l2fallback = true; };
+          if (detailPlayer) detailPlayer.addEventListener('error', _l2err, { once: true });
+          playVideo(lessonId, title, streamR.watchUrl, '', courseId, lessonEl);
+          await new Promise(function (r) { setTimeout(r, 5000); });
+          try { if (detailPlayer) detailPlayer.removeEventListener('error', _l2err); } catch (_) {}
+          if (!_l2fallback) { _rmSpinner(); return; }
+          console.log('[115] 流式转封装解码异常，降级到全量转封装');
+        } else {
+          _l2Failed = true;
+          _l2ErrMsg = (streamR && streamR.error) || '返回无 watchUrl';
+        }
+      } catch (e) {
+        _l2Failed = true;
+        _l2ErrMsg = (e && e.message) || '异常';
+      }
+      if (_l2Failed) console.error('[115] 流式转封装失败: ' + _l2ErrMsg + '，降级到全量转封装');
+      else console.log('[115] 流式转封装失败，降级到全量转封装');
+      if (detailPlayer) { try { _resetVideoForNext(detailPlayer); } catch (_) {} }
+      } // end：非 FLV 走 mpegts/流式，FLV 直接跳过到全量
+
+      // ─── Layer 3：全量转封装（整片下载+remux→file://；FLV 直接走此层，放弃秒播分层）───
+      _spinnerText('正在下载并转封装…');
+      try {
+        const rF = await window.P115Play.playFlvAsRemux(cfgId, pickCode, (p) => {
+          try {
+            if (p.stage === 'download') _spinnerText((p.value == null ? '' : p.value + '% ') + '正在下载视频…');
+            else if (p.stage === 'remux') _spinnerText('正在转封装…');
+          } catch (_) {}
+        });
+        if (!rF || !rF.success || !rF.filePath) {
+          _rmSpinner();
+          if (titleEl) titleEl.textContent = '⚠️ ' + title + ' - 转换失败';
+          alert('视频转换失败：' + ((rF && rF.error) || '转换失败'));
+          return;
+        }
+        _rmSpinner();
+        console.log('[115课程播放] 全量转封装 filePath=' + rF.filePath + ' duration=' + rF.duration);
+        playVideo(lessonId, title, rF.filePath, '', courseId, lessonEl);
+        return;
+      } catch (e) {
+        _rmSpinner();
+        if (titleEl) titleEl.textContent = '⚠️ ' + title + ' - 转换异常';
+        console.error('[115课程播放] 全量转封装异常:', e && e.message);
+        alert('视频播放异常：' + ((e && e.message) || String(e)));
+        return;
+      }
+    }
+
+    // 其它格式：边下边播（streamUrl 已在上方构造）
+    _rmSpinner();
+    playVideo(lessonId, title, streamUrl, '', courseId, lessonEl);
+  } catch (e) {
+    _rmSpinner();
+    if (titleEl) titleEl.textContent = '⚠️ ' + title + ' - 播放异常';
+    console.error('[115课程播放] 异常:', e);
+    alert('播放异常：' + (e.message || e));
+  }
+}
+
 function playVideo(lessonId, title, videoUrl, videoUrlLocal, courseId, lessonEl) {
   currentVideoLessonId = lessonId;
   currentCourseId = courseId;
 
-  // 根据同步模式决定优先使用哪个 URL
-  // IP 模式（127.0.0.1）：优先本地地址 videoUrlLocal
-  // 域名模式（yide2099.de5.net）：优先云端地址 videoUrl
-  let currentUrl, originDirectUrl = '';
-  if (useLocalSync) {
-    currentUrl = videoUrlLocal || videoUrl || '';
-    console.log('[视频] IP模式（127.0.0.1），优先使用本地地址:', currentUrl);
-  } else {
-    // 域名模式：优先用域名地址（videoUrl），域名为空时回退到本地地址
-    currentUrl = videoUrl || videoUrlLocal || '';
-  }
-  // 🔴 保存直链原始 URL（后面 _installDirectFallback 要用，直连失败时能切回代理）
+  // 优先使用云端地址 videoUrl，域名为空时回退到本地地址
+  let currentUrl = videoUrl || videoUrlLocal || '';
   originDirectUrl = currentUrl;
   // 🔴 新策略：_toProxyVideoUrl 对 http(s) 公网地址会原样返回（优先直连，跟 PC 浏览器一样）
   //    只有非 http(s)（本地路径/相对路径）才会包一层代理
@@ -790,11 +1055,6 @@ function playVideo(lessonId, title, videoUrl, videoUrlLocal, courseId, lessonEl)
     const _check = () => (player._playToken || 0) === tokenRef.current;
     // 🔴 切新课清理 fallback 标记，保证新视频能再次走"直连失败→代理"流程
     delete player._didFallbackProxy;
-
-    // ===== 🔬 安装诊断日志（仅首次安装，避免每次切视频累积监听器）=====
-    if (!player._diagInstalled) _installPlayDiag(player, originDirectUrl);
-    player._diagT0 = performance.now();
-    _diag(player, `🎬 playVideo 入口 | lessonId=${lessonId} title="${title}" mode=${useLocalSync ? 'IP本地' : '域名'} originDirect=${originDirectUrl} currentUrl=${currentUrl}`);
 
     // 播放课时：隐藏封面图，显示视频播放器
     if (coverEl) coverEl.style.display = 'none';
@@ -844,8 +1104,8 @@ function playVideo(lessonId, title, videoUrl, videoUrlLocal, courseId, lessonEl)
         errType = errMap[mediaError.code] || '未知';
         console.error('  错误类型:', errType);
       }
-      // 1) 直连失败 → 兜底：包一层代理
-      if (!player._didFallbackProxy && /^https?:\/\//i.test(originDirectUrl)) {
+      // 1) 直连失败 → 代理兜底（仅当原地址不是代理地址时）
+      if (!player._didFallbackProxy && /^https?:\/\//i.test(originDirectUrl) && !/^https?:\/\/127\.0\.0\.1:/.test(originDirectUrl)) {
         const tryProxy = _wrapProxyVideoUrl(originDirectUrl);
         if (tryProxy && tryProxy !== originDirectUrl && tryProxy !== currentUrl && player.src !== tryProxy) {
           console.log('[视频] 直连失败，切兜底代理地址:', tryProxy);
@@ -882,12 +1142,12 @@ function playVideo(lessonId, title, videoUrl, videoUrlLocal, courseId, lessonEl)
     };
 
     // 🔴 关键：先装直连 fallback，再设 src —— 这样 onerror 触发时能拿到 handler
-    _installDirectFallback(player, originDirectUrl, tokenRef);
-    _diag(player, `📌 即将设 src | currentUrl=${currentUrl}`);
-    player.src = currentUrl;
-    _diag(player, `📌 src 已设置 | player.src=${player.src}`);
-    player.load();
-    _diag(player, `📌 load() 已调用`);
+    //    若是 m3u8（115 网盘分片流）则由 _playViaSource 走 Hls.js + 本地代理
+    _playViaSource(player, currentUrl, originDirectUrl, tokenRef, () => {
+      _installDirectFallback(player, originDirectUrl, tokenRef);
+      player.src = currentUrl;
+      player.load();
+    });
 
     // ===== onplaying：播放成功时清除错误提示和 spinner =====
     player.onplaying = function() {
@@ -945,11 +1205,9 @@ function playVideo(lessonId, title, videoUrl, videoUrlLocal, courseId, lessonEl)
     };
 
     if (currentUrl) {
-      _diag(player, `▶️ 调用 player.play()`);
       const p = player.play();
       if (p && typeof p.then === 'function') {
-        p.then(() => { _diag(player, `✅ play() Promise resolve`); })
-         .catch((err) => { _diag(player, `❌ play() Promise reject: ${err && err.message || err}`); });
+        p.catch(() => {});
       }
       // ===== 启动下一个课时的预加载（HTTP 层预热，不解码）=====
       try {
@@ -1091,10 +1349,12 @@ function playVideo(lessonId, title, videoUrl, videoUrlLocal, courseId, lessonEl)
     if (vTitle) vTitle.textContent = '⚠️ 播放失败';
     alert(errMsg);
   };
-  // 🔴 先装 fallback，再设 src
-  _installDirectFallback(player, originDirectUrl, vTokenRef);
-  player.src = currentUrl;
-  player.load();
+  // 🔴 先装 fallback，再设 src；若是 m3u8（115 分片流）则走 Hls.js + 本地代理
+  _playViaSource(player, currentUrl, originDirectUrl, vTokenRef, () => {
+    _installDirectFallback(player, originDirectUrl, vTokenRef);
+    player.src = currentUrl;
+    player.load();
+  });
   player.play().catch(() => {});
 
   // 模态框播放器：视频元数据加载完成后更新左侧目录时长，并写入数据库
@@ -1162,6 +1422,8 @@ function playVideo(lessonId, title, videoUrl, videoUrlLocal, courseId, lessonEl)
 
 async function loadStats() {
   const stats = await api.getCourseStats();
+  if (currentPage !== 'stats') return;
+  if (typeof _renderTopbarTitle === 'function') _renderTopbarTitle('学习统计');
   const container = document.getElementById('stats-content');
   container.innerHTML = `
     <div class="stat-card"><div class="stat-value">${stats.totalCourses || 0}</div><div class="stat-label">总课程数</div></div>

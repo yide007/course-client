@@ -61,6 +61,19 @@ function register() {
     return db.updateCourse(courseData);
   });
 
+  // ===== 从 115 网盘同步更新课程（选中文件夹覆盖章节）=====
+  ipcMain.handle('update-course-netdisk', async (event, { courseId, title, sourcePath, sourceDirId, sourceCfgId, chapters }) => {
+    return db.updateCourse({
+      courseId,
+      title,
+      sourcePath,
+      sourceDirId,
+      sourceCfgId,
+      chapters,
+      courseMode: 'netdisk',
+    });
+  });
+
   // ===== 分类管理 =====
   ipcMain.handle('add-category', async (event, { id, name, icon }) => {
     if (id) return db.updateCategory(id, name, icon);
@@ -94,8 +107,6 @@ function register() {
   ipcMain.handle('update-lesson', async (event, { lessonId, data }) => {
     return db.updateLesson(lessonId, data);
   });
-
-  // 同步功能由 sync-service.js 提供（见 sources.js）
 }
 
 module.exports = { register };
